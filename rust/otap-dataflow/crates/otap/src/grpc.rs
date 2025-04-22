@@ -1,12 +1,17 @@
 use grpc_stubs::proto::experimental::arrow::v1::{
-    arrow_logs_service_server::{ArrowLogsService},
-    arrow_traces_service_server::{ArrowTracesService},
-    arrow_metrics_service_server::{ArrowMetricsService}
+    arrow_logs_service_server::ArrowLogsService,
+    arrow_traces_service_server::ArrowTracesService,
+    arrow_metrics_service_server::ArrowMetricsService,
+    BatchArrowRecords, BatchStatus
 
 };
 use tonic::{Request, Response, Status};
 use otap_df_engine::receiver::{EffectHandler, SendableMode};
+use otap_df_channel::mpsc;
+use std::pin::Pin;
 
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 
 /// Expose the OTLP gRPC services.
 /// See the build.rs file for more information.
@@ -21,7 +26,7 @@ pub mod grpc_stubs {
                 #[allow(unused_results)]
                 #[allow(clippy::enum_variant_names)]
                 #[allow(rustdoc::invalid_html_tags)]
-                #[path = "opentelemetry.proto.collector.logs.v1.rs"]
+                #[path = "opentelemetry.proto.experimental.arrow.v1.rs"]
                 pub mod v1;
             }
         }
@@ -30,58 +35,58 @@ pub mod grpc_stubs {
 
 
 pub struct ArrowLogsServiceImpl {
-    effect_handler: EffectHandler<OTAPRequest, SendableMode>,
+    effect_handler: EffectHandler<BatchArrowRecords, SendableMode>,
 }
 
 impl ArrowLogsServiceImpl {
-    pub fn new(effect_handler: EffectHandler<OTAPRequest, SendableMode>) -> Self {
+    pub fn new(effect_handler: EffectHandler<BatchArrowRecords, SendableMode>) -> Self {
         Self { effect_handler }
     }
 }
 pub struct ArrowMetricsServiceImpl {
-    effect_handler: EffectHandler<OTAPRequest, SendableMode>,
+    effect_handler: EffectHandler<BatchArrowRecords, SendableMode>,
 }
 
 impl ArrowMetricsServiceImpl {
-    pub fn new(effect_handler: EffectHandler<OTAPRequest, SendableMode>) -> Self {
+    pub fn new(effect_handler: EffectHandler<BatchArrowRecords, SendableMode>) -> Self {
         Self { effect_handler }
     }
 }
 pub struct ArrowTraceServiceImpl {
-    effect_handler: EffectHandler<OTAPRequest, SendableMode>,
+    effect_handler: EffectHandler<BatchArrowRecords, SendableMode>,
 }
 
 impl ArrowTraceServiceImpl {
-    pub fn new(effect_handler: EffectHandler<OTAPRequest, SendableMode>) -> Self {
+    pub fn new(effect_handler: EffectHandler<BatchArrowRecords, SendableMode>) -> Self {
         Self { effect_handler }
     }
 }
 
 #[tonic::async_trait]
 impl ArrowLogsService for ArrowLogsServiceImpl {
-    type ArrowLogsStream = 
+    type ArrowLogsStream = Pin<Box<dyn Stream<Item = Result<BatchStatus, Status>> + Send>>;
     async fn arrow_logs(
         &self,
         request: Request<tonic::Streaming<super::BatchArrowRecords>>,
     ) -> Result<Response<Self::ArrowLogsStream>, tonic::Status> {
 
-
+        let mut stream = request.into_inner();
         let effect_handler_clone = self.effect_handler.clone();
         effect_handler_clone.send_message(OTAPRequest::Logs(request.into_inner())).await;
+        // get channels tx,rx 
+        let output = ReceiverStream::new()
+
         tokio::spawn_local(async move {
-            while let Some(ping) = req_stream.next().await {
-                let ping = ping.unwrap();
-                println!("Message recieved: {}", ping.message);
-                let num_str = ping.message.split(':').next_back().unwrap();
-                let num: u32 = num_str.trim().parse().unwrap();
-                *index.write().unwrap() = num + 1;
-                let pong = *index.read().unwrap();
+            while let Some(data) = stream.next().await {
+                let data = data?;
+                let effect_handler_clone.send_message(data);
                 tx.send(Ok(Pong { pong })).await.unwrap();
             }
         });
-        Ok(Response::new(ExportLogsServiceResponse {
-            partial_success: None,
-        }))
+
+
+        Ok(Response::new(Box::pin(output)
+        as Self::ArrowLogsStream))
     }
 }
 
