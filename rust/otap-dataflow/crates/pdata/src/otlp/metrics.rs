@@ -46,7 +46,7 @@ pub mod data_points;
 /// Common structs and methods for exemplars.
 pub mod exemplar;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, TryFromPrimitive)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, TryFromPrimitive, serde::Deserialize, Hash)]
 #[allow(missing_docs)]
 #[repr(u8)]
 pub enum MetricType {
