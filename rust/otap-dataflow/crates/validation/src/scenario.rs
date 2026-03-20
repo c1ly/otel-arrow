@@ -75,6 +75,8 @@ pub struct Scenario {
     metrics_poll: Duration,
     propagation_delay: Duration,
     runtime: Duration,
+    /// Optional fault injection configuration set via
+    /// [`with_fault_injection`](Self::with_fault_injection).
     fault_config: Option<FaultConfig>,
     /// Populated during `update_configs` when fault injection is enabled.
     toxiproxy_state: Option<ToxiproxyState>,

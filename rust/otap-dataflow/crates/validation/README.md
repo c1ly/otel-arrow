@@ -110,6 +110,9 @@ e.g. `receiver`, `exporter`.
   - optional; used for test container scenarios
   - the label is referenced by `ContainerConnection` and `PipelineContainerConnection`
   - see [Test Containers](#test-containers) for details
+- `with_fault_injection(FaultConfig)` - enable fault injection using Toxiproxy
+  - optional; see [Fault Injection](#fault-injection) for details
+  - automatically manages a Toxiproxy Docker container and rewires the data path
 - `expect_within(Duration)` - set max runtime
   - optional; default: 140s
 - `run()` - renders template, launches pipelines, waits for readiness
@@ -396,6 +399,14 @@ count per message; `min/max` optional; `timeout` optional
   - `domains` accepts `AttributeDomain::Resource`, `Scope`, or `Signal`
   - `pairs` accepts `Vec<KeyValue>`
 - `AttributeNoDuplicate`: check that there are no duplicate attributes
+- `GracefulDegradation { max_latency, min_delivery_ratio }`: validates
+pipeline resilience under fault conditions.
+  - `max_latency` - maximum acceptable latency per message batch (e.g.
+  `Duration::from_secs(5)`)
+  - `min_delivery_ratio` - minimum fraction of control signals that must be
+  delivered (0.0-1.0); defaults to `1.0` (no loss allowed)
+  - requires control signals
+  - designed for use with [Fault Injection](#fault-injection)
 
 (see `validation_types::attributes` and `validation_types`)
 
@@ -627,8 +638,7 @@ let pipeline = Pipeline::from_file("./validation_pipelines/parquet_pipeline.yaml
             .address_template("http://127.0.0.1:{{ port }}"),
     );
 ```
-
-### Full example
+#### Full example
 
 ```rust
 use otap_df_validation::ContainerConfig;
@@ -670,4 +680,187 @@ Scenario::new()
     )
     .expect_within(Duration::from_secs(140))
     .run()?;
+```
+### Fault Injection
+
+Test pipeline resilience under non-ideal network conditions using
+[Toxiproxy](https://github.com/Shopify/toxiproxy). The framework
+automatically manages a Toxiproxy Docker container and routes traffic
+through it, so your test code only needs to declare which faults to inject.
+
+> **Requires Docker.** Toxiproxy runs as a container
+> (`ghcr.io/shopify/toxiproxy:2.12.0`).
+
+#### How it works
+
+When `with_fault_injection` is called on a `Scenario`, the framework:
+
+1. Starts a Toxiproxy container alongside the validation pipeline.
+2. Rewires the data path so traffic flows through the proxy.
+3. Configures the requested toxics via the Toxiproxy HTTP API.
+4. Runs the pipeline as normal and evaluates validations.
+
+```text
+Without fault injection:
+  Generator --> SUV Pipeline --> Capture
+
+With fault injection (ingress):
+  Generator --> Toxiproxy --> SUV Pipeline --> Capture
+
+With fault injection (egress):
+  Generator --> SUV Pipeline --> Toxiproxy --> Capture
+```
+
+#### FaultConfig
+
+Declares which link to inject faults on and which toxics to apply.
+
+```rust
+use otap_df_validation::fault_injection::{FaultConfig, Toxic, ToxicDirection};
+
+// Inject 500ms latency on the generator -> SUV pipeline link
+let config = FaultConfig::ingress()
+    .add_toxic(Toxic::latency(500, 100));
+
+// Inject bandwidth limit on the SUV pipeline -> capture link,
+// applied to upstream traffic with 80% probability
+let config = FaultConfig::egress()
+    .add_toxic_with(Toxic::bandwidth(64), ToxicDirection::Upstream, 0.8);
+```
+
+- `FaultConfig::ingress()` - faults on the generator -> SUV pipeline link
+- `FaultConfig::egress()` - faults on the SUV pipeline -> capture link
+- `.add_toxic(Toxic)` - add a toxic with default direction (downstream) and
+  100% probability
+- `.add_toxic_with(Toxic, ToxicDirection, toxicity)` - add a toxic with a
+  custom direction and probability (0.0-1.0)
+
+#### Available toxics
+
+| Constructor | Effect |
+| --- | --- |
+| `Toxic::latency(latency_ms, jitter_ms)` | Add delay: `latency_ms` +/- `jitter_ms` |
+| `Toxic::bandwidth(rate_kb_per_sec)` | Limit throughput to N KB/s |
+| `Toxic::slow_close(delay_ms)` | Delay TCP socket close |
+| `Toxic::timeout(timeout_ms)` | Drop data and close after timeout (0 = keep open) |
+| `Toxic::reset_peer(timeout_ms)` | Simulate TCP RST after timeout |
+| `Toxic::slicer(avg_size, size_variation, delay_us)` | Slice data into small packets with delay |
+| `Toxic::limit_data(bytes)` | Close connection after N bytes transferred |
+
+#### ToxicDirection
+
+Each toxic can target traffic in one direction:
+
+- `ToxicDirection::Downstream` (default) - affects server -> client traffic
+- `ToxicDirection::Upstream` - affects client -> server traffic
+
+#### GracefulDegradation validation
+
+The `GracefulDegradation` validation instruction is designed for use with
+fault injection. It checks two properties:
+
+- **Delivery ratio** - at least `min_delivery_ratio` of control signals must
+  be delivered by the SUV pipeline (e.g. `0.95` means up to 5% loss is
+  acceptable).
+- **Latency** - every delivered message must arrive within `max_latency`.
+
+```rust
+use otap_df_validation::ValidationInstructions;
+use std::time::Duration;
+
+let validation = ValidationInstructions::GracefulDegradation {
+    max_latency: Duration::from_secs(10),
+    min_delivery_ratio: 0.95,
+};
+```
+
+#### Example: latency fault on ingress
+
+```rust
+use otap_df_validation::fault_injection::{FaultConfig, Toxic};
+use otap_df_validation::pipeline::Pipeline;
+use otap_df_validation::scenario::Scenario;
+use otap_df_validation::traffic::{Capture, Generator};
+use otap_df_validation::ValidationInstructions;
+use std::time::Duration;
+
+Scenario::new()
+    .pipeline(
+        Pipeline::from_file("./validation_pipelines/no-processor.yaml")
+            .expect("load pipeline"),
+    )
+    .add_generator(
+        "traffic_gen",
+        Generator::logs()
+            .fixed_count(200)
+            .otlp_grpc("receiver")
+            .core_range(1, 1)
+            .static_signals(),
+    )
+    .add_capture(
+        "validate",
+        Capture::default()
+            .otlp_grpc("exporter")
+            .validate(vec![
+                ValidationInstructions::Equivalence,
+                ValidationInstructions::GracefulDegradation {
+                    max_latency: Duration::from_secs(30),
+                    min_delivery_ratio: 0.95,
+                },
+            ])
+            .control_streams(["traffic_gen"])
+            .core_range(2, 2),
+    )
+    .with_fault_injection(
+        FaultConfig::ingress()
+            .add_toxic(Toxic::latency(500, 100))
+    )
+    .expect_within(Duration::from_secs(300))
+    .run()
+    .expect("fault injection validation failed");
+```
+
+#### Example: multiple toxics with custom direction
+
+```rust
+use otap_df_validation::fault_injection::{FaultConfig, Toxic, ToxicDirection};
+use otap_df_validation::pipeline::Pipeline;
+use otap_df_validation::scenario::Scenario;
+use otap_df_validation::traffic::{Capture, Generator};
+use otap_df_validation::ValidationInstructions;
+use std::time::Duration;
+
+Scenario::new()
+    .pipeline(
+        Pipeline::from_file("./validation_pipelines/no-processor.yaml")
+            .expect("load pipeline"),
+    )
+    .add_generator(
+        "traffic_gen",
+        Generator::logs()
+            .fixed_count(200)
+            .otlp_grpc("receiver")
+            .static_signals(),
+    )
+    .add_capture(
+        "validate",
+        Capture::default()
+            .otlp_grpc("exporter")
+            .validate(vec![
+                ValidationInstructions::GracefulDegradation {
+                    max_latency: Duration::from_secs(30),
+                    min_delivery_ratio: 0.80,
+                },
+            ])
+            .control_streams(["traffic_gen"]),
+    )
+    .with_fault_injection(
+        FaultConfig::egress()
+            .add_toxic(Toxic::latency(200, 50))
+            .add_toxic_with(Toxic::bandwidth(64), ToxicDirection::Upstream, 0.5)
+            .add_toxic(Toxic::slicer(1024, 128, 500))
+    )
+    .expect_within(Duration::from_secs(300))
+    .run()
+    .expect("multi-toxic validation failed");
 ```

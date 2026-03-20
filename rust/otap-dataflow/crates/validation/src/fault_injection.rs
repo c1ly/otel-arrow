@@ -301,19 +301,28 @@ impl FaultConfig {
 /// JSON body for `POST /proxies`.
 #[derive(Serialize)]
 struct ProxyCreate {
+    /// Unique name for this proxy.
     name: String,
+    /// Address the proxy listens on (e.g., `"0.0.0.0:25000"`).
     listen: String,
+    /// Address to forward traffic to (e.g., `"host.docker.internal:4317"`).
     upstream: String,
+    /// Whether the proxy is enabled.
     enabled: bool,
 }
 
 /// JSON body for `POST /proxies/{proxy}/toxics`.
 #[derive(Serialize)]
 struct ToxicCreate {
+    /// Unique name for this toxic (e.g., `"latency_downstream"`).
     name: String,
+    /// Toxiproxy toxic type (e.g., `"latency"`, `"bandwidth"`).
     r#type: String,
+    /// Direction: `"upstream"` or `"downstream"`.
     stream: String,
+    /// Probability of the toxic being applied (0.0-1.0).
     toxicity: f32,
+    /// Toxic-specific configuration attributes.
     attributes: HashMap<String, u64>,
 }
 
