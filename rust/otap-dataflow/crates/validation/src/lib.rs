@@ -11,6 +11,8 @@ pub mod encode_decode;
 pub mod error;
 /// temp fanout processor to use for validation test
 pub mod fanout_processor;
+/// Fault injection support using Toxiproxy
+pub mod fault_injection;
 /// metric definition to serialize json result from metric admin endpoint
 pub mod metrics_types;
 /// module for validating pipelines, runs and monitors pipelines
@@ -30,6 +32,7 @@ pub mod validation_types;
 
 pub use container::ContainerConfig;
 pub use error::ValidationError;
+pub use fault_injection::{FaultConfig, FaultTarget, Toxic, ToxicDirection};
 pub use validation_types::ValidationInstructions;
 
 #[cfg(test)]
@@ -180,6 +183,44 @@ mod tests {
             .expect_within(Duration::from_secs(140))
             .run()
             .expect("filter processor validation failed");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn no_processor_with_latency_fault() {
+        use crate::fault_injection::{FaultConfig, Toxic};
+
+        Scenario::new()
+            .pipeline(
+                Pipeline::from_file("./validation_pipelines/no-processor.yaml")
+                    .expect("failed to read pipeline yaml"),
+            )
+            .add_generator(
+                "traffic_gen",
+                Generator::logs()
+                    .fixed_count(200)
+                    .otlp_grpc("receiver")
+                    .core_range(1, 1)
+                    .static_signals(),
+            )
+            .add_capture(
+                "validate",
+                Capture::default()
+                    .otlp_grpc("exporter")
+                    .validate(vec![
+                        ValidationInstructions::Equivalence,
+                        ValidationInstructions::GracefulDegradation {
+                            max_latency: Duration::from_secs(30),
+                            min_delivery_ratio: 0.95,
+                        },
+                    ])
+                    .control_streams(["traffic_gen"])
+                    .core_range(2, 2),
+            )
+            .with_fault_injection(FaultConfig::ingress().add_toxic(Toxic::latency(500, 100)))
+            .expect_within(Duration::from_secs(300))
+            .run()
+            .expect("fault injection validation failed");
     }
 
     #[test]

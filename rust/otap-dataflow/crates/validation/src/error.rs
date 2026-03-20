@@ -23,6 +23,8 @@ pub enum ValidationError {
     Validation(String),
     /// Docker container lifecycle errors (start, stop, port resolution).
     Container(String),
+    /// Fault injection (Toxiproxy) errors.
+    FaultInjection(String),
 }
 
 impl std::error::Error for ValidationError {}
@@ -37,6 +39,7 @@ impl fmt::Display for ValidationError {
             ValidationError::Ready(e) => write!(f, "ready check failed: {e}"),
             ValidationError::Validation(e) => write!(f, "validation failed: {e}"),
             ValidationError::Container(e) => write!(f, "container error: {e}"),
+            ValidationError::FaultInjection(e) => write!(f, "fault injection error: {e}"),
         }
     }
 }

@@ -6,6 +6,9 @@
 
 use crate::container::ContainerConfig;
 use crate::error::ValidationError;
+use crate::fault_injection::{
+    FaultConfig, FaultTarget, TOXIPROXY_PROXY_PORT, ToxicSpec, ToxiproxyClient, toxiproxy_container,
+};
 use crate::pipeline::{EndpointKind, Pipeline};
 use crate::simulate::run_pipelines_with_timeout;
 use crate::template::render_jinja;
@@ -54,6 +57,11 @@ fn allocate_container_port(
     }
 }
 
+/// Label used for the auto-managed Toxiproxy container.
+const TOXIPROXY_CONTAINER_LABEL: &str = "__toxiproxy__";
+/// Name of the proxy created inside Toxiproxy.
+const TOXIPROXY_PROXY_NAME: &str = "validation_proxy";
+
 /// Programmatic scenario builder used by tests.
 pub struct Scenario {
     pipeline: Option<Pipeline>,
@@ -67,6 +75,21 @@ pub struct Scenario {
     metrics_poll: Duration,
     propagation_delay: Duration,
     runtime: Duration,
+    fault_config: Option<FaultConfig>,
+    /// Populated during `update_configs` when fault injection is enabled.
+    toxiproxy_state: Option<ToxiproxyState>,
+}
+
+/// State computed during `update_configs` for Toxiproxy wiring.
+struct ToxiproxyState {
+    /// URL for the Toxiproxy HTTP control API.
+    api_url: String,
+    /// The address Toxiproxy listens on inside the container.
+    listen_addr: String,
+    /// The upstream address Toxiproxy forwards to.
+    upstream_addr: String,
+    /// Toxics to apply after the proxy is created.
+    toxics: Vec<ToxicSpec>,
 }
 
 impl Default for Scenario {
@@ -91,6 +114,8 @@ impl Scenario {
             metrics_poll: DEFAULT_METRICS_POLL,
             propagation_delay: DEFAULT_PROPAGATION_DELAY,
             runtime: DEFAULT_SCENARIO_RUNTIME,
+            fault_config: None,
+            toxiproxy_state: None,
         }
     }
 
@@ -137,6 +162,34 @@ impl Scenario {
         self
     }
 
+    /// Configure fault injection using Toxiproxy.
+    ///
+    /// When enabled, a Toxiproxy Docker container is automatically started
+    /// and traffic is routed through it. Toxics are applied according to the
+    /// provided [`FaultConfig`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use otap_df_validation::fault_injection::{FaultConfig, Toxic};
+    ///
+    /// Scenario::new()
+    ///     .pipeline(pipeline)
+    ///     .add_generator("gen", generator)
+    ///     .add_capture("cap", capture)
+    ///     .with_fault_injection(
+    ///         FaultConfig::ingress()
+    ///             .add_toxic(Toxic::latency(500, 100))
+    ///             .add_toxic(Toxic::bandwidth(64))
+    ///     )
+    ///     .run()
+    /// ```
+    #[must_use]
+    pub fn with_fault_injection(mut self, config: FaultConfig) -> Self {
+        self.fault_config = Some(config);
+        self
+    }
+
     /// Execute the scenario.
     ///
     /// When containers are configured (via [`add_container`](Self::add_container)),
@@ -159,6 +212,7 @@ impl Scenario {
 
         let rendered_group = self.render_template()?;
         let containers = self.containers;
+        let toxiproxy_state = self.toxiproxy_state;
 
         let tokio_rt = tokio::runtime::Runtime::new()
             .map_err(|e| ValidationError::Io(format!("failed to create tokio runtime: {e}")))?;
@@ -169,6 +223,31 @@ impl Scenario {
                 running_containers.push(config.start().await.map_err(|e| {
                     ValidationError::Container(format!("container '{label}': {e}"))
                 })?);
+            }
+
+            // Configure Toxiproxy if fault injection is enabled.
+            if let Some(state) = &toxiproxy_state {
+                let toxi_client = ToxiproxyClient::new(state.api_url.clone());
+                toxi_client
+                    .wait_until_ready(20, Duration::from_millis(500))
+                    .await?;
+                toxi_client
+                    .create_proxy(
+                        TOXIPROXY_PROXY_NAME,
+                        &state.listen_addr,
+                        &state.upstream_addr,
+                    )
+                    .await?;
+                for spec in &state.toxics {
+                    toxi_client
+                        .add_toxic(
+                            TOXIPROXY_PROXY_NAME,
+                            &spec.toxic,
+                            spec.direction,
+                            spec.toxicity,
+                        )
+                        .await?;
+                }
             }
 
             let result = run_pipelines_with_timeout(
@@ -336,6 +415,119 @@ impl Scenario {
             pipeline.set_node_config_value(&conn.node_name, &conn.config_key_path, &address)?;
         }
 
+        // Wire Toxiproxy into the data path when fault injection is enabled.
+        // This inserts a proxy between the generator and the SUV pipeline
+        // (ingress) or between the SUV pipeline and the capture (egress).
+        //
+        // Ingress:
+        //   Generator -> Toxiproxy:listen -> Toxiproxy:upstream -> SUV Pipeline
+        //   The generator's suv_port is rewritten to point at the Toxiproxy
+        //   listen port. Toxiproxy's upstream points at the original receiver.
+        //
+        // Egress:
+        //   SUV Pipeline -> Toxiproxy:listen -> Toxiproxy:upstream -> Capture
+        //   The pipeline exporter is rewritten to point at the Toxiproxy
+        //   listen port. Toxiproxy's upstream points at the original capture.
+        if let Some(ref fault_config) = self.fault_config {
+            let api_host_port = pick_port("toxiproxy API")?;
+            let proxy_host_port = pick_port("toxiproxy proxy")?;
+            let proxy_container_port = TOXIPROXY_PROXY_PORT;
+
+            // Determine the upstream address — this is where Toxiproxy
+            // forwards traffic to. The generators and pipeline run on the
+            // host, so Toxiproxy (inside Docker) needs to reach back to the
+            // host. We use host.testcontainers.internal (preferred by
+            // testcontainers) or host.docker.internal as fallback.
+            let host_from_container = "host.docker.internal";
+
+            let (listen_addr, upstream_addr) = match fault_config.target {
+                FaultTarget::Ingress => {
+                    // Pick any generator's suv_port as the upstream target.
+                    // For the first iteration we support a single proxy for
+                    // all generators (they all share the same receiver port
+                    // when there is only one generator, which is the common
+                    // case). With multiple generators pointing at different
+                    // receivers, only the first is proxied.
+                    let upstream_port = self
+                        .generators
+                        .values()
+                        .next()
+                        .map(|g| g.suv_port)
+                        .ok_or_else(|| {
+                            ValidationError::Config(
+                                "fault injection: no generators to proxy".into(),
+                            )
+                        })?;
+
+                    // Rewrite all generators to send to the Toxiproxy host
+                    // port instead of the original receiver port.
+                    for generator in self.generators.values_mut() {
+                        if generator.container_connection.is_none() {
+                            generator.suv_port = proxy_host_port;
+                        }
+                    }
+
+                    let listen = format!("0.0.0.0:{proxy_container_port}");
+                    let upstream = format!("{host_from_container}:{upstream_port}");
+                    (listen, upstream)
+                }
+                FaultTarget::Egress => {
+                    let upstream_port = self
+                        .captures
+                        .values()
+                        .next()
+                        .map(|c| c.suv_port)
+                        .ok_or_else(|| {
+                            ValidationError::Config("fault injection: no captures to proxy".into())
+                        })?;
+
+                    // Rewrite all captures to listen on a new port. The
+                    // pipeline exporter already points at the original
+                    // capture port — we need to insert Toxiproxy in between.
+                    // Toxiproxy upstream -> original capture port (on host).
+                    // Pipeline exporter -> Toxiproxy listen port (on host).
+                    for capture in self.captures.values_mut() {
+                        if capture.container_connection.is_none() {
+                            capture.suv_port = proxy_host_port;
+                        }
+                    }
+
+                    // Rewrite the pipeline exporter to point at the proxy.
+                    // We need to re-apply the endpoint for the first capture.
+                    let pipeline = self
+                        .pipeline
+                        .as_mut()
+                        .ok_or_else(|| ValidationError::Config("pipeline not provided".into()))?;
+                    let first_capture = self.captures.values().next().ok_or_else(|| {
+                        ValidationError::Config("fault injection: no captures".into())
+                    })?;
+                    let node = first_capture.suv_receiver_node.clone();
+                    let endpoint = match first_capture.suv_receiver_type {
+                        MessageType::Otlp => EndpointKind::OtlpGrpcExporter(node),
+                        MessageType::Otap => EndpointKind::OtapGrpcExporter(node),
+                    };
+                    pipeline.apply_endpoint(endpoint, proxy_host_port)?;
+
+                    let listen = format!("0.0.0.0:{proxy_container_port}");
+                    let upstream = format!("{host_from_container}:{upstream_port}");
+                    (listen, upstream)
+                }
+            };
+
+            // Insert the Toxiproxy container.
+            let _ = self.containers.insert(
+                TOXIPROXY_CONTAINER_LABEL.into(),
+                toxiproxy_container(api_host_port, proxy_host_port, proxy_container_port),
+            );
+
+            self.toxiproxy_state = Some(ToxiproxyState {
+                api_url: format!("http://127.0.0.1:{api_host_port}"),
+                listen_addr,
+                upstream_addr,
+                toxics: fault_config.toxics.clone(),
+            });
+        }
+
         self.admin_addr = format!("127.0.0.1:{}", pick_port("admin")?);
 
         Ok(())
@@ -446,6 +638,7 @@ impl Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fault_injection::{FaultTarget, Toxic};
     use crate::pipeline::{Pipeline, PipelineContainerConnection};
     use crate::traffic::ContainerConnection;
 
@@ -684,5 +877,77 @@ nodes:
             .expect_err("missing internal_port should error");
         assert!(matches!(err, ValidationError::Config(_)));
         assert!(err.to_string().contains("missing internal_port"));
+    }
+
+    #[test]
+    fn with_fault_injection_stores_config() {
+        let scenario = Scenario::new()
+            .with_fault_injection(FaultConfig::ingress().add_toxic(Toxic::latency(500, 100)));
+        assert!(scenario.fault_config.is_some());
+        let fc = scenario.fault_config.as_ref().unwrap();
+        assert_eq!(fc.target, FaultTarget::Ingress);
+        assert_eq!(fc.toxics.len(), 1);
+    }
+
+    #[test]
+    fn update_configs_wires_toxiproxy_ingress() {
+        let pipeline = Pipeline::from_yaml(sample_yaml()).unwrap();
+        let mut scenario = Scenario::new()
+            .pipeline(pipeline)
+            .add_generator("gen", Generator::logs().otlp_grpc("receiver"))
+            .add_capture(
+                "cap",
+                Capture::default()
+                    .otlp_grpc("exporter")
+                    .control_streams(["gen"]),
+            )
+            .with_fault_injection(FaultConfig::ingress().add_toxic(Toxic::latency(500, 100)));
+
+        scenario
+            .update_configs()
+            .expect("update_configs with fault injection should succeed");
+
+        // A Toxiproxy container should have been inserted.
+        assert!(scenario.containers.contains_key(TOXIPROXY_CONTAINER_LABEL));
+        let toxi = scenario.containers.get(TOXIPROXY_CONTAINER_LABEL).unwrap();
+        assert_eq!(toxi.image, crate::fault_injection::TOXIPROXY_IMAGE);
+        assert_eq!(toxi.mapped_ports.len(), 2); // API + proxy
+
+        // Toxiproxy state should be populated.
+        let state = scenario.toxiproxy_state.as_ref().unwrap();
+        assert!(state.api_url.starts_with("http://127.0.0.1:"));
+        assert!(state.listen_addr.starts_with("0.0.0.0:"));
+        assert!(state.upstream_addr.contains("host.docker.internal:"));
+        assert_eq!(state.toxics.len(), 1);
+
+        // The generator's suv_port should point at the proxy, not the
+        // original pipeline receiver port.
+        let generator = scenario.generators.get("gen").unwrap();
+        let toxi_proxy_host_port = toxi.mapped_ports[&TOXIPROXY_PROXY_PORT];
+        assert_eq!(generator.suv_port, toxi_proxy_host_port);
+    }
+
+    #[test]
+    fn update_configs_wires_toxiproxy_egress() {
+        let pipeline = Pipeline::from_yaml(sample_yaml()).unwrap();
+        let mut scenario = Scenario::new()
+            .pipeline(pipeline)
+            .add_generator("gen", Generator::logs().otlp_grpc("receiver"))
+            .add_capture(
+                "cap",
+                Capture::default()
+                    .otlp_grpc("exporter")
+                    .control_streams(["gen"]),
+            )
+            .with_fault_injection(FaultConfig::egress().add_toxic(Toxic::bandwidth(64)));
+
+        scenario
+            .update_configs()
+            .expect("update_configs with egress fault injection should succeed");
+
+        assert!(scenario.containers.contains_key(TOXIPROXY_CONTAINER_LABEL));
+        let state = scenario.toxiproxy_state.as_ref().unwrap();
+        assert!(state.upstream_addr.contains("host.docker.internal:"));
+        assert_eq!(state.toxics.len(), 1);
     }
 }

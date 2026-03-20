@@ -5,6 +5,7 @@
 
 pub mod attributes;
 mod batch;
+mod graceful_degradation;
 mod signal_dropped;
 
 use attributes::{
@@ -12,11 +13,17 @@ use attributes::{
     validate_require_key_values, validate_require_keys,
 };
 use batch::{validate_batch_bytes, validate_batch_items};
+use graceful_degradation::validate_graceful_degradation;
 use otap_df_pdata::proto::OtlpProtoMessage;
 use otap_df_pdata::testing::equiv::validate_equivalent;
 use serde::{Deserialize, Serialize};
 use signal_dropped::validate_signal_drop;
 use std::time::Duration;
+
+/// Default minimum delivery ratio for [`ValidationInstructions::GracefulDegradation`].
+fn default_min_delivery() -> f64 {
+    1.0
+}
 /// Supported validation instructions executed by the validation exporter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -79,6 +86,19 @@ pub enum ValidationInstructions {
     },
     /// Ensure no duplicate attribute keys within all attribute lists.
     AttributeNoDuplicate,
+    /// Validate graceful degradation under fault conditions.
+    ///
+    /// Checks that signals are delivered within `max_latency` and that
+    /// at least `min_delivery_ratio` of control signals are delivered.
+    GracefulDegradation {
+        /// Maximum acceptable latency per message batch.
+        #[serde(with = "humantime_serde")]
+        max_latency: Duration,
+        /// Minimum fraction of signals that must be delivered (0.0-1.0).
+        /// Defaults to 1.0 (no loss allowed).
+        #[serde(default = "default_min_delivery")]
+        min_delivery_ratio: f64,
+    },
 }
 impl ValidationInstructions {
     /// Evaluate this validation against control and system-under-validation messages.
@@ -116,6 +136,10 @@ impl ValidationInstructions {
                 validate_require_key_values(&suv_msgs, domains, pairs)
             }
             ValidationInstructions::AttributeNoDuplicate => validate_no_duplicate_keys(&suv_msgs),
+            ValidationInstructions::GracefulDegradation {
+                max_latency,
+                min_delivery_ratio,
+            } => validate_graceful_degradation(control, suv, *max_latency, *min_delivery_ratio),
         }
     }
 }
