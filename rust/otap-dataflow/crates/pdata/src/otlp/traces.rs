@@ -31,10 +31,10 @@ use crate::proto_encode_len_delimited_unknown_size;
 /// Common methods for delta-encoding ID and PARENT_ID columns.
 pub mod delta_decoder;
 
-mod span_event;
-mod span_link;
-mod spans_arrays;
-mod spans_status_arrays;
+pub(crate) mod span_event;
+pub(crate) mod span_link;
+pub(crate) mod spans_arrays;
+pub(crate) mod spans_status_arrays;
 
 struct TracesDataArrays<'a> {
     span_arrays: SpansArrays<'a>,
@@ -739,14 +739,28 @@ mod test {
         .unwrap();
 
         let mut otap_batch = OtapArrowRecords::Traces(Traces::default());
-        otap_batch.set(ArrowPayloadType::Spans, spans_rb);
-        otap_batch.set(ArrowPayloadType::ResourceAttrs, attr_16_rb.clone());
-        otap_batch.set(ArrowPayloadType::ScopeAttrs, attr_16_rb.clone());
-        otap_batch.set(ArrowPayloadType::SpanAttrs, attr_16_rb.clone());
-        otap_batch.set(ArrowPayloadType::SpanEvents, span_events_rb);
-        otap_batch.set(ArrowPayloadType::SpanLinks, span_links_rb);
-        otap_batch.set(ArrowPayloadType::SpanEventAttrs, attr_32_rb.clone());
-        otap_batch.set(ArrowPayloadType::SpanLinkAttrs, attr_32_rb.clone());
+        otap_batch.set(ArrowPayloadType::Spans, spans_rb).unwrap();
+        otap_batch
+            .set(ArrowPayloadType::ResourceAttrs, attr_16_rb.clone())
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::ScopeAttrs, attr_16_rb.clone())
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::SpanAttrs, attr_16_rb.clone())
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::SpanEvents, span_events_rb)
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::SpanLinks, span_links_rb)
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::SpanEventAttrs, attr_32_rb.clone())
+            .unwrap();
+        otap_batch
+            .set(ArrowPayloadType::SpanLinkAttrs, attr_32_rb.clone())
+            .unwrap();
 
         let mut result_buf = ProtoBuffer::new();
         let mut encoder = TracesProtoBytesEncoder::new();

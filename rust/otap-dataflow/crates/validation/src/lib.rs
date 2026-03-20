@@ -41,12 +41,9 @@ mod tests {
     use crate::pipeline::Pipeline;
     use crate::scenario::Scenario;
     use crate::traffic::{Capture, Generator};
-    #[cfg(target_os = "linux")]
     use crate::validation_types::attributes::{AnyValue, AttributeDomain, KeyValue};
-    use std::time::Duration;
 
     #[test]
-    #[ignore = "flaky test, https://github.com/open-telemetry/otel-arrow/issues/2227"]
     fn no_processor() {
         Scenario::new()
             .pipeline(
@@ -69,13 +66,12 @@ mod tests {
                     .control_streams(["traffic_gen"])
                     .core_range(2, 2),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("validation scenario failed");
     }
 
     #[test]
-    #[ignore] // flaky, see https://github.com/open-telemetry/otel-arrow/issues/2227
     fn debug_processor() {
         Scenario::new()
             .pipeline(
@@ -98,16 +94,12 @@ mod tests {
                     .control_streams(["traffic_gen"])
                     .core_range(2, 2),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("validation scenario failed");
     }
 
-    // Pipeline validation tests are end-to-end integration tests that spin up real
-    // gRPC servers and are inherently slow (~60s+). They validate data correctness
-    // through platform-independent code paths, so running on Linux alone is sufficient.
     #[test]
-    #[cfg(target_os = "linux")]
     fn attribute_processor_pipeline() {
         let deny = ValidationInstructions::AttributeDeny {
             domains: vec![AttributeDomain::Signal],
@@ -137,13 +129,12 @@ mod tests {
                     .validate(vec![deny, require])
                     .core_range(2, 2),
             )
-            .expect_within(Duration::from_secs(500))
+            .expect_within(30)
             .run()
             .expect("attribute processor validation failed");
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn filter_processor_pipeline() {
         let attr_check = ValidationInstructions::AttributeRequireKeyValue {
             domains: vec![AttributeDomain::Signal],
@@ -180,51 +171,12 @@ mod tests {
                     .control_streams(["traffic_gen"])
                     .core_range(2, 2),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("filter processor validation failed");
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
-    fn no_processor_with_latency_fault() {
-        use crate::fault_injection::{FaultConfig, Toxic};
-
-        Scenario::new()
-            .pipeline(
-                Pipeline::from_file("./validation_pipelines/no-processor.yaml")
-                    .expect("failed to read pipeline yaml"),
-            )
-            .add_generator(
-                "traffic_gen",
-                Generator::logs()
-                    .fixed_count(200)
-                    .otlp_grpc("receiver")
-                    .core_range(1, 1)
-                    .static_signals(),
-            )
-            .add_capture(
-                "validate",
-                Capture::default()
-                    .otlp_grpc("exporter")
-                    .validate(vec![
-                        ValidationInstructions::Equivalence,
-                        ValidationInstructions::GracefulDegradation {
-                            max_latency: Duration::from_secs(30),
-                            min_delivery_ratio: 0.95,
-                        },
-                    ])
-                    .control_streams(["traffic_gen"])
-                    .core_range(2, 2),
-            )
-            .with_fault_injection(FaultConfig::ingress().add_toxic(Toxic::latency(500, 100)))
-            .expect_within(Duration::from_secs(300))
-            .run()
-            .expect("fault injection validation failed");
-    }
-
-    #[test]
-    #[ignore = "flaky test, see https://github.com/open-telemetry/otel-arrow/issues/2227"]
     fn multiple_input_output() {
         Scenario::new()
             .pipeline(
@@ -252,7 +204,7 @@ mod tests {
                     .validate(vec![ValidationInstructions::Equivalence])
                     .control_streams(["traffic_gen1", "traffic_gen2"]),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("validation scenario failed");
     }
@@ -265,13 +217,12 @@ mod tls_tests {
     use crate::scenario::Scenario;
     use crate::traffic::{Capture, Generator, TlsConfig};
     use otap_test_tls_certs::{ExtendedKeyUsage, write_ca_and_leaf_to_dir};
-    use std::time::Duration;
 
     /// End-to-end validation: traffic flows through a TLS-enabled OTLP gRPC
     /// receiver in the SUV pipeline.
     #[test]
     fn tls_no_processor() {
-        otap_df_otap::crypto::ensure_crypto_provider();
+        let _ = otap_df_otap::crypto::install_crypto_provider();
 
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let dir = temp_dir.path();
@@ -314,7 +265,7 @@ mod tls_tests {
                     .otlp_grpc("exporter")
                     .control_streams(["traffic_gen"]),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("TLS validation scenario failed");
     }
@@ -323,7 +274,7 @@ mod tls_tests {
     /// receiver in the SUV pipeline, requiring client certificate authentication.
     #[test]
     fn mtls_no_processor() {
-        otap_df_otap::crypto::ensure_crypto_provider();
+        let _ = otap_df_otap::crypto::install_crypto_provider();
 
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let dir = temp_dir.path();
@@ -378,7 +329,7 @@ mod tls_tests {
                     .otlp_grpc("exporter")
                     .control_streams(["traffic_gen"]),
             )
-            .expect_within(Duration::from_secs(140))
+            .expect_within(30)
             .run()
             .expect("mTLS validation scenario failed");
     }

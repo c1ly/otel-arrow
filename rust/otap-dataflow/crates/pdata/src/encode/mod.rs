@@ -11,12 +11,6 @@ mod error;
 
 pub use error::{Error, Result};
 
-use crate::views::metrics::{
-    self, BucketsView, DataView, ExemplarView, ExponentialHistogramDataPointView,
-    ExponentialHistogramView, GaugeView, HistogramDataPointView, HistogramView, MetricView,
-    MetricsView, NumberDataPointView, ResourceMetricsView, ScopeMetricsView, SumView,
-    SummaryDataPointView, SummaryView, ValueAtQuantileView,
-};
 use crate::{
     encode::record::{
         attributes::{AttributesRecordBatchBuilder, AttributesRecordBatchBuilderConstructorHelper},
@@ -38,6 +32,12 @@ use otap_df_pdata_views::views::common::{
 };
 use otap_df_pdata_views::views::logs::{
     LogRecordView, LogsDataView, ResourceLogsView, ScopeLogsView,
+};
+use otap_df_pdata_views::views::metrics::{
+    self, BucketsView, DataView, ExemplarView, ExponentialHistogramDataPointView,
+    ExponentialHistogramView, GaugeView, HistogramDataPointView, HistogramView, MetricView,
+    MetricsView, NumberDataPointView, ResourceMetricsView, ScopeMetricsView, SumView,
+    SummaryDataPointView, SummaryView, ValueAtQuantileView,
 };
 use otap_df_pdata_views::views::resource::ResourceView;
 use otap_df_pdata_views::views::trace::{
@@ -229,7 +229,7 @@ where
     ];
     for (rb, payload_type) in pairs {
         if rb.num_rows() > 0 {
-            otap_batch.set(payload_type, rb);
+            otap_batch.set(payload_type, rb)?;
         }
     }
 
@@ -507,22 +507,22 @@ where
     let mut otap_batch = OtapArrowRecords::Logs(Logs::default());
 
     // append logs record
-    otap_batch.set(ArrowPayloadType::Logs, logs.finish()?);
+    otap_batch.set(ArrowPayloadType::Logs, logs.finish()?)?;
 
     // append log attrs record batch if there is one
     let log_attrs_rb = log_attrs.finish()?;
     if log_attrs_rb.num_rows() > 0 {
-        otap_batch.set(ArrowPayloadType::LogAttrs, log_attrs_rb);
+        otap_batch.set(ArrowPayloadType::LogAttrs, log_attrs_rb)?;
     }
 
     let resource_attrs_rb = resource_attrs.finish()?;
     if resource_attrs_rb.num_rows() > 0 {
-        otap_batch.set(ArrowPayloadType::ResourceAttrs, resource_attrs_rb);
+        otap_batch.set(ArrowPayloadType::ResourceAttrs, resource_attrs_rb)?;
     }
 
     let scope_attrs_rb = scope_attrs.finish()?;
     if scope_attrs_rb.num_rows() > 0 {
-        otap_batch.set(ArrowPayloadType::ScopeAttrs, scope_attrs_rb);
+        otap_batch.set(ArrowPayloadType::ScopeAttrs, scope_attrs_rb)?;
     }
 
     Ok(otap_batch)
@@ -995,7 +995,7 @@ where
     ];
     for (rb, payload_type) in pairs {
         if rb.num_rows() > 0 {
-            otap_batch.set(payload_type, rb);
+            otap_batch.set(payload_type, rb)?;
         }
     }
 
@@ -4491,6 +4491,15 @@ mod test {
     fn test_spans_all_fields_proto_struct() {
         let traces_view = _generate_traces_data_all_fields();
         _test_traces_data_all_fields(&traces_view);
+    }
+
+    #[test]
+    fn test_traces_all_fields_otap_view() {
+        use crate::views::otap::OtapTracesView;
+        let traces_view = _generate_traces_data_all_fields();
+        let otap_batch = encode_spans_otap_batch(&traces_view).unwrap();
+        let otap_traces_view = OtapTracesView::try_from(&otap_batch).unwrap();
+        _test_traces_data_all_fields(&otap_traces_view);
     }
 
     #[test]
