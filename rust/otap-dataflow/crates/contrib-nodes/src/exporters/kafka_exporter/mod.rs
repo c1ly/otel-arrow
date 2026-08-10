@@ -10,15 +10,22 @@
 //! # Features
 //!
 //! - Per-signal topic and encoding configuration (traces, metrics, logs)
+<<<<<<< HEAD
 //! - Optional signals — only configure the signals you need
+=======
+//! - Optional signals -- only configure the signals you need
+>>>>>>> main
 //! - Per-signal encoding: `otlp_proto` or `otap_proto`
 //! - Per-signal dynamic topic routing from transport headers
 //! - Authentication: SASL with AWS MSK IAM OAUTHBEARER
 //! - Producer tuning: `required_acks`, `max_message_bytes`, `linger_ms`
 //! - Escape hatch: `producer_config` for arbitrary librdkafka settings
 //! - (Planned) resource attribute-based partitioning for stateful processing
+<<<<<<< HEAD
 //!   (config knob present but not yet implemented; enabling it will currently
 //!   trigger a config error to fail fast)
+=======
+>>>>>>> main
 //! - Async-first using `rdkafka::FutureProducer`
 //! - Per-signal telemetry metrics
 //!
@@ -34,14 +41,22 @@
 //!       traces:
 //!         topic: "otlp_spans"
 //!         encoding: "otlp_proto"
+<<<<<<< HEAD
 //!         topic_from_transport_header: "x_traces_topic"  # optional dynamic routing
+=======
+//!         topic_from_transport_header: "x-traces-topic"  # optional dynamic routing
+>>>>>>> main
 //!       metrics:
 //!         topic: "otlp_metrics"
 //!         encoding: "otlp_proto"
 //!       logs:
 //!         topic: "otlp_logs"
 //!         encoding: "otlp_proto"
+<<<<<<< HEAD
 //!         topic_from_transport_header: "x_logs_topic"    # optional dynamic routing
+=======
+//!         topic_from_transport_header: "x-logs-topic"    # optional dynamic routing
+>>>>>>> main
 //!       timeout_ms: 5000
 //!       compression: "zstd"
 //!       required_acks: "one"

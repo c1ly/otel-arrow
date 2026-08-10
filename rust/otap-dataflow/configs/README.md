@@ -13,64 +13,132 @@ future.
 
 ## Available Configurations
 
-### `fake-batch-debug-noop.yaml`
+### `internal-telemetry-logs.yaml`
+
+Routes only the engine's own logs through the Internal Telemetry System:
+
+- Uses the dedicated engine observability pipeline
+- Receives internal OTLP logs with `receiver:internal_telemetry`
+- Routes logs to the console exporter
+- Includes a commented `record_json` console exporter configuration
+
+Validate the configuration, then run the demo on one core:
+
+```bash
+cargo run -- --config configs/internal-telemetry-logs.yaml --validate-and-exit
+cargo run -- --config configs/internal-telemetry-logs.yaml --num-cores 1
+```
+
+### `internal-telemetry-metrics.yaml`
+
+Routes only the engine's own metrics through the Internal Telemetry System:
+
+- Uses the dedicated engine observability pipeline
+- Receives internal OTLP metrics with `receiver:internal_telemetry`
+- Collects metric snapshots every second and emits them every two seconds
+- Applies metric views for engine, pipeline, and flow metrics
+- Routes decoded metrics to the debug processor
+
+Validate the configuration, then run the demo on one core and let it produce
+at least three metric batches:
+
+```bash
+cargo run -- --config configs/internal-telemetry-metrics.yaml --validate-and-exit
+cargo run -- --config configs/internal-telemetry-metrics.yaml --num-cores 1 \
+  2>&1 | tee /tmp/its-metrics.log
+```
+
+The detailed metric output should contain the viewed stream names
+`process_memory_usage`, `process_cpu_utilization`, `process_uptime`,
+`processor_incoming_items`, `processor_outgoing_items`, and
+`processing_duration`. Stop the process with `Ctrl-C` after inspection, then
+list the viewed streams with:
+
+```bash
+rg 'Name: (process_|processor_|processing_)' /tmp/its-metrics.log
+```
+
+### `trafficgen-batch-debug-noop.yaml`
 
 Demonstrates the batch processor:
 
-- Generates fake data -> batch processor -> debug processor -> noop exporter
+- Generates synthetic traffic -> batch processor -> debug processor -> noop exporter
 
-### `fake-debug-noop-telemetry.yaml`
+### `trafficgen-debug-noop-telemetry.yaml`
 
 A basic pipeline with telemetry export enabled:
 
-- Generates fake data -> debug processor -> noop exporter
-- Includes `engine.telemetry` configuration with console metrics export
+- Generates synthetic traffic -> debug processor -> noop exporter
+- Routes internal metrics through the engine observability pipeline to an OTLP
+  gRPC exporter. Logs retain the default asynchronous console behavior.
 
-### `fake-debug-output-ports.yaml`
-
-Demonstrates multiple output ports:
-
-- Generates fake data -> debug processor with multiple output ports -> noop exporter
-
-### `fake-filter-debug-noop.yaml`
+### `trafficgen-filter-debug-noop.yaml`
 
 Demonstrates the filter processor:
 
-- Generates fake data -> filter processor -> debug processor -> noop exporter
+- Generates synthetic traffic -> filter processor -> debug processor -> noop exporter
 
-### `fake-metric-filter-debug-noop.yaml`
+### `trafficgen-metric-filter-debug-noop.yaml`
 
 Demonstrates metric-name filtering:
 
-- Generates fake metrics -> filter processor by metric name -> debug processor
+- Generates synthetic metrics -> filter processor by metric name -> debug processor
   -> noop exporter
 
-### `fake-transform-debug-noop.yaml`
+### `trafficgen-per-signal-metrics-demo.yaml`
+
+Demonstrates the opt-in per-signal produced/consumed item counts a node can
+emit:
+
+- Generates a mix of logs, metrics and traces -> log-sampling processor -> noop
+  exporter
+- Only opted-in nodes report `node.producer.produced.items` and
+  `node.consumer.consumed.items`, each split by the `signal` datapoint attribute;
+  nodes that are not opted in omit these metrics
+  (per-node `policies.telemetry.item_counts: true`, or globally via
+  `runtime_metrics: detailed`); recording requires `runtime_metrics: normal` or
+  higher.
+- View metrics at:
+  `http://127.0.0.1:8080/api/v1/telemetry/metrics?format=json`
+
+### `trafficgen-flow-metrics-demo.yaml`
+
+Demonstrates a flow range with multiple drop decision nodes:
+
+- Generates synthetic logs -> sampling, filtering, transform, and recordset KQL
+  processors -> noop exporter
+- Routes metrics-only internal telemetry through an explicit observability pipeline;
+  filters to native flow metric instrument names, and prints them with the detailed
+  debug processor
+- The debug processor displays the bounded `signal` datapoint attribute, while the
+  admin metrics endpoint displays flow scope attributes
+
+### `trafficgen-transform-debug-noop.yaml`
 
 Demonstrate using the transform processor to transform data
 
-- Generates fake data -> debug -> transform -> debug -> noop exporter
+- Generates synthetic traffic -> debug -> transform -> debug -> noop exporter
 
 The input data can be viewed at /tmp/debug1.log and the transformed output at
 /tmp/debug2.log
 
-### `fake-otap.yaml`
+### `trafficgen-otap.yaml`
 
-Generates fake data and exports via OTAP:
+Generates synthetic traffic and exports via OTAP:
 
-- Generates fake data -> OTAP exporter to `http://127.0.0.1:4318`
+- Generates synthetic traffic -> OTAP exporter to `http://127.0.0.1:4318`
 
-### `fake-otlp.yaml`
+### `trafficgen-otlp.yaml`
 
-Generates fake data and exports via OTLP:
+Generates synthetic traffic and exports via OTLP:
 
-- Generates fake data -> OTLP exporter to `http://127.0.0.1:4317`
+- Generates synthetic traffic -> OTLP exporter to `http://127.0.0.1:4317`
 
-### `fake-parquet.yaml`
+### `trafficgen-parquet.yaml`
 
-Generates fake data and exports to Parquet files:
+Generates synthetic traffic and exports to Parquet files:
 
-- Generates fake data -> Parquet exporter to `/tmp`
+- Generates synthetic traffic -> Parquet exporter to `/tmp`
 
 Parquet exporter configs can include an optional `retry` block for cloud-backed
 object stores. Any omitted fields use the `object_store` defaults.
@@ -90,21 +158,21 @@ them; invalid retry values are still rejected during config validation. It does
 not replay consumed Parquet writers after `AsyncArrowWriter::close` fails, and
 it is separate from the retry processor's whole-batch redelivery policy.
 
-### `fake-perf.yaml`
+### `trafficgen-perf.yaml`
 
-Generates fake data with performance metrics:
+Generates synthetic traffic with performance metrics:
 
-- Generates fake data -> performance exporter
+- Generates synthetic traffic -> performance exporter
 - View metrics at: `http://127.0.0.1:8080/telemetry/metrics?format=prometheus&reset=false`
 
-### `fake-multi-tenant-perf.yaml`
+### `trafficgen-multi-tenant-perf.yaml`
 
 Generates mixed-tenant traffic using weighted resource attribute rotation:
 
 - Uses `data_source: synthetic` with two resource attribute sets (`tenant.id:
 prod` and `tenant.id: ppe`) weighted 3:1, producing a 75% / 25% batch split
   per pipeline.
-- Generates fake data -> performance exporter
+- Generates synthetic traffic -> performance exporter
 - View metrics at: `http://127.0.0.1:8080/telemetry/metrics?format=prometheus&reset=false`
 
 The `resource_attributes` field accepts three forms:
@@ -196,7 +264,7 @@ echo "<134>$(date '+%b %d %H:%M:%S') testhost testtag: Test message" \
 ```
 
 For sustained load testing, see the
-[load generator](../../tools/pipeline_perf_test/load_generator/readme.md):
+[load generator](../../../tools/pipeline_perf_test/load_generator/readme.md):
 
 ```bash
 cd tools/pipeline_perf_test/load_generator
@@ -210,6 +278,13 @@ python loadgen.py \
 
 > **Note:** The default `syslog-perf.yaml` config only enables UDP.
 > To also accept TCP, add a `tcp` section under `protocol` in the config.
+
+### `opamp-controller-extension.yaml`
+
+Example demonstrating how to configure the Dataflow Engine to receive its
+configuration from a remote OpAMP server. See the
+[documentation](../crates/controller/src/extension/opamp/README.md)
+for more details about how to run this example.
 
 ## Usage
 

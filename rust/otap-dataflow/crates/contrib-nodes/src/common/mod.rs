@@ -4,5 +4,9 @@
 //! Shared functions and data types for contrib node implementations.
 
 /// Shared Kafka utilities for Kafka receiver and exporter.
+<<<<<<< HEAD
 #[cfg(feature = "kafka-exporter")]
+=======
+#[cfg(any(feature = "kafka-receiver", feature = "kafka-exporter"))]
+>>>>>>> main
 pub mod kafka;

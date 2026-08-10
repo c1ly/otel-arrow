@@ -190,7 +190,11 @@ mod tests {
         )
     }
 
+<<<<<<< HEAD
     // ── resolve_security_protocol ───────────────────────────
+=======
+    // -- resolve_security_protocol ---------------------------
+>>>>>>> main
 
     #[cfg(feature = "aws")]
     #[test]
@@ -249,7 +253,11 @@ mod tests {
         assert_eq!(resolve_security_protocol(None, None), "PLAINTEXT");
     }
 
+<<<<<<< HEAD
     // ── apply_sasl_config ───────────────────────────────────
+=======
+    // -- apply_sasl_config -----------------------------------
+>>>>>>> main
 
     #[cfg(feature = "aws")]
     #[test]
@@ -318,7 +326,11 @@ mod tests {
         assert_eq!(config.get("sasl.mechanism"), None);
     }
 
+<<<<<<< HEAD
     // ── build_aws_msk_context ───────────────────────────────
+=======
+    // -- build_aws_msk_context -------------------------------
+>>>>>>> main
 
     #[cfg(feature = "aws")]
     #[test]
@@ -365,7 +377,11 @@ mod tests {
         assert!(build_aws_msk_context(Some(&auth)).is_none());
     }
 
+<<<<<<< HEAD
     // ── TlsConfig::apply_to_client_config ───────────────────
+=======
+    // -- TlsConfig::apply_to_client_config -------------------
+>>>>>>> main
 
     #[test]
     fn tls_applies_cert_paths() {
