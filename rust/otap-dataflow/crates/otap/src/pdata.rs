@@ -159,15 +159,17 @@ impl Context {
         self.stack.last().map(|f| f.route.clone())
     }
 
-    /// Are there any subscribers with actual interests (ACKS or
-    /// NACKS)?
+    /// Returns true when this context must be retained until processing completes.
     ///
-    /// TODO: This could be O(1) by propagating a new interest bit.
+    /// Ack/Nack subscribers require completion routing, while pipeline metric
+    /// frames require completion unwinding so their measurements are recorded.
     #[must_use]
-    pub fn has_subscribers(&self) -> bool {
-        self.stack
-            .iter()
-            .any(|f| f.interests.intersects(Interests::ACKS_OR_NACKS))
+    pub fn needs_completion_tracking(&self) -> bool {
+        self.stack.iter().any(|frame| {
+            frame
+                .interests
+                .intersects(Interests::ACKS_OR_NACKS | Interests::PIPELINE_METRICS)
+        })
     }
 
     /// Returns true if the context stack has any frames at all.
@@ -323,6 +325,7 @@ impl Context {
 
     /// Signal captured on the forward path for per-signal metric attribution.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn signal(&self) -> Option<SignalType> {
         self.signal
     }
@@ -424,6 +427,26 @@ impl Context {
     pub fn frames(&self) -> &[Frame] {
         &self.stack
     }
+
+    /// Clone the request-scoped metadata (transport headers, peer address) and
+    /// leave the Ack/Nack routing state behind.
+    ///
+    /// Frames are not copied: a processor that splits a batch parks the inbound
+    /// context and subscribes each outbound batch separately, so copied frames
+    /// would Ack the upstream node once per outbound batch. The flow_metric
+    /// accumulator is dropped for the same reason and must be redistributed by
+    /// the caller. The signal is left unset; the engine recaptures it from the
+    /// payload on the next metrics stamp.
+    #[must_use]
+    pub fn clone_detached(&self) -> Self {
+        Self {
+            stack: Vec::new(),
+            transport_headers: self.transport_headers.clone(),
+            peer_addr: self.peer_addr,
+            flow_compute_ns: None,
+            signal: None,
+        }
+    }
 }
 
 // Frame is defined in otap_df_engine::control (imported above).
@@ -491,7 +514,7 @@ impl otap_df_engine::Unwindable for OtapPdata {
     }
 
     fn signal(&self) -> Option<SignalType> {
-        self.context.signal()
+        Some(self.signal_type())
     }
 
     fn drop_payload(&mut self) {
@@ -637,13 +660,7 @@ impl OtapPdata {
     #[must_use]
     pub fn clone_without_context(&self) -> Self {
         Self {
-            context: Context {
-                stack: Vec::new(),
-                transport_headers: self.context.transport_headers.clone(),
-                peer_addr: self.context.peer_addr,
-                flow_compute_ns: None,
-                signal: None,
-            },
+            context: self.context.clone_detached(),
             payload: self.payload.clone(),
         }
     }
@@ -678,13 +695,6 @@ impl OtapPdata {
     ) -> Self {
         self.context.subscribe_to(interests, calldata, node_id);
         self
-    }
-
-    /// Returns Context::has_subscribers()
-    #[cfg(any(test, feature = "test-utils"))]
-    #[must_use]
-    pub fn has_subscribers(&self) -> bool {
-        self.context.has_subscribers()
     }
 
     /// Stamp the top context frame with a receive timestamp.
@@ -1059,6 +1069,7 @@ mod test {
     use crate::testing::{
         TestCallData, create_empty_test_pdata, create_test_pdata, next_ack, next_nack,
     };
+    use crate::transport_headers::TransportHeader;
     use otap_df_channel::mpsc::Channel as LocalChannel;
     use otap_df_engine::ConsumerEffectHandlerExtension;
     use otap_df_engine::control::{
@@ -2015,7 +2026,7 @@ mod test {
         assert_eq!(ctx.source_node(), Some(42));
         assert_eq!(ctx.stack.len(), 1);
         // Source-node-only frames have empty interests -- not subscribers.
-        assert!(!ctx.has_subscribers());
+        assert!(!ctx.has_ack_or_nack_subscribers());
 
         // Same node_id is a no-op (dedup).
         ctx.set_source_node(42);
@@ -2025,7 +2036,7 @@ mod test {
         ctx.set_source_node(99);
         assert_eq!(ctx.source_node(), Some(99));
         assert_eq!(ctx.stack.len(), 2);
-        assert!(!ctx.has_subscribers());
+        assert!(!ctx.has_ack_or_nack_subscribers());
     }
 
     #[test]
@@ -2039,7 +2050,7 @@ mod test {
             100,
         );
         let pdata = pdata.add_source_node(200);
-        assert!(pdata.has_subscribers());
+        assert!(pdata.has_ack_or_nack_interests());
 
         // next_ack skips the empty-interests frame and finds node 100.
         let ack = AckMsg::new(pdata);
@@ -2119,11 +2130,11 @@ mod test {
                 101,
             )
             .add_source_node(202);
-        assert!(pdata.has_subscribers());
+        assert!(pdata.has_ack_or_nack_interests());
         assert_eq!(pdata.get_source_node(), Some(202));
 
         let cloned = pdata.clone_without_context();
-        assert!(!cloned.has_subscribers());
+        assert!(!cloned.has_ack_or_nack_interests());
         assert_eq!(cloned.get_source_node(), None);
 
         let ack = AckMsg::new(cloned.clone());
@@ -2134,6 +2145,54 @@ mod test {
             next_nack(nack).is_none(),
             "reset context must not route nacks"
         );
+    }
+
+    /// Scenario: a context carrying transport headers, a peer address, Ack/Nack
+    /// subscribers, an active flow_metric accumulator and a captured signal is
+    /// detached to seed an outbound batch produced by splitting the inbound one.
+    /// Guarantees: the request-scoped metadata is copied while the frame stack,
+    /// flow accumulator and signal are left behind, so each outbound batch keeps
+    /// the originating request's metadata without re-Acking the upstream node.
+    #[test]
+    fn clone_detached_keeps_request_metadata_and_drops_routing_state() {
+        let addr: SocketAddr = "10.0.0.1:5005".parse().unwrap();
+        let mut headers = TransportHeaders::new();
+        headers.push(TransportHeader::text("tenant", "x-tenant", "acme"));
+
+        let (test_data, pdata) = create_test();
+        let mut pdata = pdata
+            .test_subscribe_to(Interests::ACKS | Interests::NACKS, test_data.into(), 101)
+            .with_peer_addr(addr)
+            .with_transport_headers(headers.clone());
+        pdata.start_flow_metric();
+        pdata.add_flow_compute(42);
+
+        let (mut context, _payload) = pdata.into_parts();
+        context.capture_signal(SignalType::Logs);
+        assert!(
+            context.has_ack_or_nack_subscribers(),
+            "precondition: has subscribers"
+        );
+
+        let detached = context.clone_detached();
+
+        assert_eq!(detached.transport_headers(), Some(&headers));
+        assert_eq!(detached.peer_addr(), Some(addr));
+        assert!(
+            !detached.has_ack_or_nack_subscribers(),
+            "detached context must not inherit the inbound subscribers"
+        );
+        assert_eq!(detached.source_node(), None);
+        assert_eq!(
+            detached.flow_compute_ns, None,
+            "flow accumulation is distributed by the caller, not copied"
+        );
+        assert_eq!(detached.signal(), None);
+
+        // The source context is untouched: it stays parked in the split
+        // processor's slot map and Acks upstream once its outbounds settle.
+        assert!(context.has_ack_or_nack_subscribers());
+        assert_eq!(context.signal(), Some(SignalType::Logs));
     }
 
     // -----------------------------------------------------------------------
@@ -2172,6 +2231,25 @@ mod test {
             frames[0].route.entry_time_ns, 0,
             "CONSUMER_METRICS alone should not stamp time"
         );
+    }
+
+    /// Scenario: Contexts contain no frames, source-tagging only, pipeline metrics, or Ack interests.
+    /// Guarantees: Completion tracking is required only for pipeline metrics and Ack/Nack routing.
+    #[test]
+    fn needs_completion_tracking_matches_completion_interests() {
+        let mut empty = Context::default();
+        assert!(!empty.needs_completion_tracking());
+
+        empty.set_source_node(1);
+        assert!(!empty.needs_completion_tracking());
+
+        let mut metrics = Context::default();
+        metrics.push_entry_frame(1, Interests::CONSUMER_METRICS);
+        assert!(metrics.needs_completion_tracking());
+
+        let mut subscriber = Context::default();
+        subscriber.subscribe_to(Interests::ACKS, CallData::new(), 1);
+        assert!(subscriber.needs_completion_tracking());
     }
 
     #[test]

@@ -49,7 +49,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "aws")]
 use crate::common::kafka::aws::AwsMskAuthClientContext;
-use otap_df_telemetry::{otel_error, otel_info, otel_warn};
 use rdkafka::ClientContext;
 use rdkafka::client::OAuthToken;
 use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance};
@@ -209,8 +208,8 @@ pub(crate) struct RebalanceMetricsDelta {
     pub(crate) partition_revocations: u64,
     /// Current number of partitions owned by this consumer at drain time.
     ///
-    /// Unlike the other fields (which are counter deltas), this is a
-    /// point-in-time snapshot used to drive the `partitions_assigned` gauge.
+    /// Unlike the other fields (which are counter deltas), this is an absolute
+    /// snapshot used to drive `receiver.kafka.consumer.group.partitions`.
     pub(crate) partitions_owned: u64,
     /// Commit failures during revoke since the last drain.
     pub(crate) rebalance_commit_errors: u64,
@@ -489,9 +488,10 @@ impl RebalanceState {
     /// Replace the assigned set with the *complete* assignment `full`.
     ///
     /// `full` must be the consumer's entire current assignment, not a rebalance
-    /// delta. The `partition_assignments` metric is incremented only by the number
-    /// of partitions that are newly present (not previously owned), so
-    /// cooperative-sticky rebalances that retain partitions don't re-count them.
+    /// delta. `receiver.kafka.consumer.group.partition.assignments` is incremented
+    /// only by the number of partitions that are newly present (not previously
+    /// owned), so cooperative-sticky rebalances that retain partitions don't
+    /// re-count them.
     ///
     /// All partitions **newly acquired** in this rebalance share a single fresh
     /// ownership generation (the allocator is bumped at most once per call, and
@@ -1523,9 +1523,9 @@ mod tests {
 
     /// Scenario (operational visibility): a full assignment is applied via `handle_assign`'s
     /// `set_assignment` and then drained.
-    /// Guarantees: `partitions_owned` reports the current assignment size (a
-    /// gauge snapshot) even though it is delivered alongside counter deltas, so
-    /// the receiver's `partitions_assigned` gauge tracks live ownership.
+    /// Guarantees: `partitions_owned` reports the current assignment size (an
+    /// absolute snapshot) even though it is delivered alongside counter deltas,
+    /// so `receiver.kafka.consumer.group.partitions` tracks live ownership.
     #[test]
     fn drain_metrics_reports_current_owned_count() {
         let state = RebalanceState::new(false);
