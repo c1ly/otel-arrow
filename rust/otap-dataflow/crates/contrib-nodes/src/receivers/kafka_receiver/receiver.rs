@@ -252,14 +252,20 @@ impl KafkaReceiver {
         mut config: KafkaReceiverConfig,
     ) -> Result<Self, ConfigError> {
         // Kafka static membership requires each consumer-group member to have a
-        // unique group.instance.id. On a multi-core pipeline every core would
-        // otherwise share the configured ID and fence one another, so suffix it
-        // with the pipeline core ID.
-        if pipeline_ctx.num_cores() > 1 {
-            if let Some(base_id) = config.group_instance_id() {
-                let resolved = format!("{base_id}-{}", pipeline_ctx.core_id());
-                config.set_group_instance_id(resolved);
-            }
+        // unique group.instance.id. Two distinct concurrent members would fence
+        // one another (FENCED_INSTANCE_ID) or block each other's join, so the
+        // configured base id is disambiguated along both core id and generation
+        if let Some(base_id) = config.group_instance_id() {
+            let resolved = if pipeline_ctx.num_cores() > 1 {
+                format!(
+                    "{base_id}-{}-gen{}",
+                    pipeline_ctx.core_id(),
+                    pipeline_ctx.deployment_generation()
+                )
+            } else {
+                format!("{base_id}-gen{}", pipeline_ctx.deployment_generation())
+            };
+            config.set_group_instance_id(resolved);
         }
 
         // Warn about consumer_config keys that may be overwritten by first-class fields.
@@ -778,11 +784,6 @@ impl KafkaReceiver {
             CancellationToken,
         )> = None;
 
-        // Set once the receiver-first drain protocol begins. After this the
-        // receiver stops polling Kafka (see the `consumer.recv()` branch guard)
-        // but stays responsive to control messages until `Shutdown` arrives.
-        let mut draining_deadline: Option<Instant> = None;
-
         loop {
             // Reconcile any partition revocations / metrics produced by the
             // rebalance callbacks since the last iteration. Cheap when idle.
@@ -875,35 +876,59 @@ impl KafkaReceiver {
                             // Receiver-first shutdown: the engine sends
                             // DrainIngress and waits for notify_receiver_drained()
                             // before shutting down downstream nodes.
-                            if draining_deadline.is_none() {
-                                otel_info!("kafka.receiver.drain_ingress");
-                                // Stop admitting new Kafka records immediately.
-                                // Unsubscribing halts the subscription so the
-                                // `consumer.recv()` branch (now gated on
-                                // `draining_deadline.is_none()`) yields no more
-                                // messages.
-                                consumer.unsubscribe();
-                                draining_deadline = Some(deadline);
-                                // Bounded receiver-local drain: one final
-                                // synchronous commit of everything acked so far.
-                                // Un-acked offsets are safely re-delivered on
-                                // restart (at-least-once), so there is nothing
-                                // else to wait on.
-                                if manual_commit {
-                                    if let Err(e) = self.commit_offsets(consumer.as_ref(), &receiver_id) {
-                                        otel_error!(
-                                            "kafka.drain.commit_failed",
-                                            error = %e,
-                                        );
-                                    }
-                                    self.refresh_committable_snapshot();
+                            otel_info!(
+                                "kafka.receiver.drain_ingress",
+                                pending = self.offset_tracker.total_pending() as u64,
+                            );
+
+                            // commit before unsubscribe
+                            if manual_commit {
+                                if let Err(e) = self.commit_offsets(consumer.as_ref(), &receiver_id) {
+                                    otel_error!(
+                                        "kafka.drain.commit_failed",
+                                        error = %e,
+                                    );
                                 }
-                                // Signal the runtime that receiver-local drain is
-                                // complete so it can proceed to shut down
-                                // downstream nodes. The loop stays alive and
-                                // responsive to the eventual Shutdown message.
-                                effect_handler.notify_receiver_drained().await?;
+                                // Fold commit-callback outcomes into the metric set
+                                // so the terminal snapshot reflects them.
+                                self.reconcile_rebalance_state();
                             }
+
+                            // Leave the consumer group and close the consumer off
+                            // the loop thread, bounded by the drain deadline. Both
+                            // `unsubscribe()` and the consumer's `Drop`
+                            // (leave-group/close) are synchronous librdkafka FFI
+                            // calls that can block indefinitely on an unreachable
+                            // broker; running them inline on this single-threaded
+                            // runtime would stall it past the deadline. Leaving the
+                            // group promptly (rather than lingering) is what lets a
+                            // newly-launched pipeline generation take over the
+                            // partitions during a live reconfiguration. The same
+                            // bounded lag-worker drain and `Arc`-count caveats as
+                            // the shutdown path apply (see that arm's notes).
+                            if let Some((handle, lag_deadline, lag_cancel)) =
+                                lag_refresh_in_flight.take()
+                            {
+                                lag_cancel.cancel();
+                                let bound =
+                                    lag_deadline.min(tokio::time::Instant::from_std(deadline));
+                                let _ = tokio::time::timeout_at(bound, handle).await;
+                            }
+                            _ = telemetry_cancel_handle.cancel().await;
+                            let close_handle = tokio::task::spawn_blocking(move || {
+                                consumer.unsubscribe();
+                                drop(consumer);
+                            });
+                            let _ = tokio::time::timeout_at(
+                                tokio::time::Instant::from_std(deadline),
+                                close_handle,
+                            )
+                            .await;
+                            effect_handler.notify_receiver_drained().await?;
+                            return Ok(TerminalState::new(
+                                deadline,
+                                self.metrics.terminal_snapshots(),
+                            ));
                         },
                         Ok(NodeControlMsg::Ack(ack_msg)) => {
                             self.metrics.record_acknowledgement(
@@ -998,9 +1023,8 @@ impl KafkaReceiver {
                     }
                 }
 
-                // 3. Consume Kafka messages. Stops once draining begins so no
-                // new records are admitted during receiver-first shutdown.
-                result = consumer.recv(), if draining_deadline.is_none() => {
+                // 3. Consume Kafka messages.
+                result = consumer.recv() => {
                     match result {
                         Ok(data) => {
                             // Extract metadata before processing so we can
@@ -1237,9 +1261,7 @@ impl KafkaReceiver {
                 }
 
                 // 4. Periodic consumer-lag refresh trigger (opt-in). Fires only
-                // when the timer is armed, no refresh is already in flight, and
-                // the receiver is not draining, so no broker calls are issued
-                // during shutdown.
+                // when the timer is armed and no refresh is already in flight.
                 _ = async {
                     match lag_ticker.as_mut() {
                         Some(ticker) => ticker.tick().await,
@@ -1248,8 +1270,7 @@ impl KafkaReceiver {
                         None => std::future::pending().await,
                     }
                 }, if lag_ticker.is_some()
-                    && lag_refresh_in_flight.is_none()
-                    && draining_deadline.is_none() => {
+                    && lag_refresh_in_flight.is_none() => {
                     // pass the instant deadline to the worker so it can
                     // monitor itself during the consumer_lag calculation
                     // if deadline exceeds, it returns None
@@ -1961,6 +1982,29 @@ mod tests {
         KafkaReceiverConfig::try_from(builder).expect("test config valid")
     }
 
+    /// Builds an auto-commit [`KafkaReceiverConfig`] for a single traces topic
+    /// with an explicit consumer-group id. Used by drain tests that verify
+    /// auto-commit mode reports drained immediately (it has no in-flight offset
+    /// tracker to wait on).
+    fn auto_traces_config(
+        brokers: &str,
+        group_id: &str,
+        traces_topic: &str,
+    ) -> KafkaReceiverConfig {
+        let builder = KafkaReceiverConfigBuilder::new(brokers, group_id, "test-client")
+            .with_traces(
+                SignalConfig::new(vec![traces_topic.to_string()])
+                    .with_encoding(MessageFormat::OtlpProto),
+            )
+            .with_commit(CommitConfig {
+                mode: ConfigCommitMode::Auto,
+                interval_ms: Some(1000),
+            })
+            .with_auto_offset_reset(AutoOffsetReset::Earliest)
+            .with_isolation_level(IsolationLevel::ReadUncommitted);
+        KafkaReceiverConfig::try_from(builder).expect("test config valid")
+    }
+
     /// Builds a manual-commit [`KafkaReceiverConfig`] for a single traces topic
     /// with NO safety-net commit timer, so offsets are committed purely through
     /// ack/nack. Used by tests that need deterministic watermark assertions
@@ -2060,9 +2104,24 @@ mod tests {
     }
 
     fn make_pipeline_ctx_with(core_id: usize, num_cores: usize) -> PipelineContext {
+        make_pipeline_ctx_with_generation(core_id, num_cores, 0)
+    }
+
+    fn make_pipeline_ctx_with_generation(
+        core_id: usize,
+        num_cores: usize,
+        deployment_generation: u64,
+    ) -> PipelineContext {
         let registry = TelemetryRegistryHandle::new();
         let controller_ctx = ControllerContext::new(registry);
-        controller_ctx.pipeline_context_with("grp".into(), "pipeline".into(), core_id, num_cores, 0)
+        controller_ctx.pipeline_context_with_generation(
+            "grp".into(),
+            "pipeline".into(),
+            core_id,
+            num_cores,
+            0,
+            deployment_generation,
+        )
     }
 
     fn make_config_with_group_instance_id(instance_id: &str) -> KafkaReceiverConfig {
@@ -2090,35 +2149,64 @@ mod tests {
     // ---- Construction and configuration ----
 
     /// Scenario (construction and configuration): a receiver is built on a multi-core
-    /// pipeline with a configured `group.instance.id`.
-    /// Guarantees: the instance id is suffixed with the core id so each core joins the
-    /// consumer group as a distinct static member.
+    /// pipeline (deployment generation 4) with a configured `group.instance.id`.
+    /// Guarantees: the instance id is suffixed with the core id and the deployment
+    /// generation so each core, in each generation, joins the consumer group as a
+    /// distinct static member and cannot fence a concurrently-draining generation.
     #[test]
     fn new_suffixes_group_instance_id_with_core_id_when_multi_core() {
         let cfg = make_config_with_group_instance_id("instance-1");
-        let ctx = make_pipeline_ctx_with(3, 4);
+        let ctx = make_pipeline_ctx_with_generation(3, 4, 4);
         let receiver = KafkaReceiver::new(ctx, cfg).expect("receiver should build");
         assert_eq!(
             receiver.config.group_instance_id(),
-            Some("instance-1-3"),
-            "multi-core pipeline should suffix group.instance.id with core id"
+            Some("instance-1-3-gen4"),
+            "multi-core pipeline should suffix group.instance.id with core id and generation"
         );
     }
 
     /// Scenario (construction and configuration): a receiver is built on a single-core
-    /// pipeline with a configured `group.instance.id`.
-    /// Guarantees: the instance id is left unchanged, so a single-core deployment keeps the
-    /// operator-provided static member id.
+    /// pipeline (deployment generation 7) with a configured `group.instance.id`.
+    /// Guarantees: the instance id is suffixed with the deployment generation (but not a
+    /// core id), so a new generation joining during a live reconfiguration does not collide
+    /// with the draining old generation on the same single core.
     #[test]
     fn new_keeps_group_instance_id_unchanged_when_single_core() {
         let cfg = make_config_with_group_instance_id("instance-1");
-        let ctx = make_pipeline_ctx_with(0, 1);
+        let ctx = make_pipeline_ctx_with_generation(0, 1, 7);
         let receiver = KafkaReceiver::new(ctx, cfg).expect("receiver should build");
         assert_eq!(
             receiver.config.group_instance_id(),
-            Some("instance-1"),
-            "single-core pipeline should leave group.instance.id unchanged"
+            Some("instance-1-gen7"),
+            "single-core pipeline should suffix group.instance.id with the deployment generation"
         );
+    }
+
+    /// Scenario (construction and configuration): two receivers share the same base
+    /// `group.instance.id`, core, and pipeline but belong to consecutive deployment
+    /// generations (as during a live-reconfiguration cutover).
+    /// Guarantees: the two receivers resolve to distinct `group.instance.id` values, so the
+    /// new generation is not fenced by the draining old generation while both are group
+    /// members.
+    #[test]
+    fn new_disambiguates_group_instance_id_across_deployment_generations() {
+        let old = KafkaReceiver::new(
+            make_pipeline_ctx_with_generation(0, 1, 1),
+            make_config_with_group_instance_id("instance-1"),
+        )
+        .expect("old-generation receiver should build");
+        let new = KafkaReceiver::new(
+            make_pipeline_ctx_with_generation(0, 1, 2),
+            make_config_with_group_instance_id("instance-1"),
+        )
+        .expect("new-generation receiver should build");
+        assert_ne!(
+            old.config.group_instance_id(),
+            new.config.group_instance_id(),
+            "consecutive generations must not share a static member id"
+        );
+        assert_eq!(old.config.group_instance_id(), Some("instance-1-gen1"));
+        assert_eq!(new.config.group_instance_id(), Some("instance-1-gen2"));
     }
 
     /// Scenario (construction and configuration): a receiver is built without a
@@ -4987,8 +5075,10 @@ mod tests {
     /// then receives `DrainIngress`; more records are produced after the drain.
     /// Guarantees: the receiver emits `RuntimeControlMsg::ReceiverDrained`, stops
     /// forwarding new records (no pdata arrives post-drain), commits the
-    /// pre-drain offsets (committed offset >= INITIAL), and still terminates when
-    /// later sent `Shutdown` (via `await_stopped` returning).
+    /// pre-drain offsets (committed offset >= INITIAL), and terminates on the
+    /// drain itself -- `await_stopped` returns without any later `Shutdown`,
+    /// because a drained receiver is removed from the engine's pending set and
+    /// never receives `Shutdown`.
     #[tokio::test]
     async fn drain_ingress_stops_polling_and_notifies_drained() {
         const TOPIC: &str = "drain-ingress-traces";
@@ -5062,10 +5152,10 @@ mod tests {
                     "receiver forwarded a record after DrainIngress; polling did not stop",
                 );
 
-                // Committed offset must account for the pre-drain batch (final
-                // commit was issued during drain and flushed on unsubscribe).
-                // The commit is asynchronous, so poll until the broker reports
-                // it rather than asserting once.
+                // Committed offset must account for the pre-drain batch (the final
+                // commit is issued at drain completion, just before the consumer
+                // leaves the group). The commit is asynchronous, so poll until the
+                // broker reports it rather than asserting once.
                 let brokers = cluster.bootstrap_servers().to_string();
                 let committed =
                     poll_until(Duration::from_secs(5), Duration::from_millis(250), || {
@@ -5081,11 +5171,225 @@ mod tests {
                         .expect("kafka-test: committed-offset probe failed"),
                 );
 
-                // The receiver must still terminate cleanly on Shutdown; awaiting the
-                // spawned task returning (without hanging) preserves the
-                // clean-termination guarantee.
-                receiver.shutdown(Duration::from_secs(5));
+                // The receiver must terminate on the drain alone (no Shutdown is
+                // sent): awaiting the spawned task returning without hanging
+                // preserves the clean-termination guarantee.
                 receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain final commit): a manual-commit receiver acks a
+    /// first batch, then holds a second batch in flight (un-acked) when
+    /// `DrainIngress` arrives.
+    /// Guarantees: the drain's single final commit commits the offsets acked
+    /// before the drain (committed offset >= the acked count), but does NOT wait
+    /// for or commit the still-in-flight un-acked records -- their offsets are left
+    /// uncommitted for at-least-once redelivery to the new pipeline generation --
+    /// and the receiver terminates on the drain alone (no `Shutdown`).
+    #[tokio::test]
+    async fn drain_commits_acked_offsets_and_leaves_inflight_for_redelivery() {
+        const TOPIC: &str = "drain-inflight-ack-traces";
+        const ACKED: usize = 3;
+        const INFLIGHT: usize = 2;
+        let group = "drain-inflight-ack-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..(ACKED + INFLIGHT) {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 60_000, None);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Ack the first batch so those offsets are committable at drain
+                // time.
+                for _ in 0..ACKED {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+                // Forward the second batch but hold the Acks: these stay in flight
+                // when the drain begins and must NOT be waited on or committed.
+                let mut inflight = Vec::with_capacity(INFLIGHT);
+                for _ in 0..INFLIGHT {
+                    inflight.push(receiver.recv_pdata().await);
+                }
+
+                // Drain: commits the acked batch, leaves the group, returns. The
+                // in-flight batch is never awaited.
+                receiver.drain(Duration::from_secs(30));
+
+                // ReceiverDrained is emitted (skip startup timer msgs).
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // The acked batch's offsets are committed by the drain's final
+                // commit, but the committed watermark must not reach the in-flight
+                // records (they redeliver at-least-once).
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed =
+                    poll_until(Duration::from_secs(5), Duration::from_millis(250), || {
+                        committed_offset(&brokers, group, TOPIC, 0)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .is_some_and(|o| o >= ACKED as i64)
+                    })
+                    .await;
+                assert!(
+                    committed,
+                    "offsets acked before drain should be committed, got {:?}",
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed"),
+                );
+                assert!(
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed")
+                        .is_none_or(|o| o < (ACKED + INFLIGHT) as i64),
+                    "in-flight un-acked offsets must not be committed at drain",
+                );
+
+                drop(inflight);
+                // Terminates on the drain alone (no Shutdown sent).
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: reconfiguration cutover): the receiver (modeling the
+    /// old pipeline generation) owns the topic's single partition in a consumer
+    /// group; a second consumer in the SAME group (modeling the new generation)
+    /// then joins and subscribes. The receiver is drained.
+    /// Guarantees: after the receiver drains, it leaves the consumer group, so the
+    /// second consumer is assigned the partition promptly and can consume a record
+    /// produced after the drain -- proving the draining old generation does not
+    /// hold the partition hostage and stall the new generation during a live
+    /// reconfiguration.
+    #[tokio::test]
+    async fn drain_leaves_group_so_new_consumer_gets_partitions() {
+        const TOPIC: &str = "drain-cutover-traces";
+        let group = "drain-cutover-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                // Produce and let the receiver (old generation) consume + ack one
+                // record so it demonstrably owns the partition.
+                producer
+                    .send_full(SendRecord::new(TOPIC, &bytes).key(b"pre"))
+                    .await
+                    .expect("send pre-drain");
+
+                let cfg =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 60_000, None);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                let pdata = receiver.recv_pdata().await;
+                receiver.ack(pdata);
+
+                // The new-generation consumer joins the same group while the old
+                // generation is still a member (mirrors the controller launching
+                // the new instance before draining the old one).
+                let consumer_new: StreamConsumer = ClientConfig::new()
+                    .set("bootstrap.servers", cluster.bootstrap_servers())
+                    .set("group.id", group)
+                    .set("enable.auto.commit", "false")
+                    .set("auto.offset.reset", "latest")
+                    .create()
+                    .expect("failed to create new-generation consumer");
+                consumer_new
+                    .subscribe(&[TOPIC])
+                    .expect("new-generation consumer subscribe");
+
+                // Drain the old generation. Once it completes it leaves the group,
+                // freeing the partition for the new-generation consumer.
+                receiver.drain(Duration::from_secs(10));
+                receiver.await_stopped().await;
+
+                // The new consumer must now own the partition. Produce a record and
+                // require the new consumer to receive it within a bounded window --
+                // this can only happen if the old generation released the
+                // partition.
+                producer
+                    .send_full(SendRecord::new(TOPIC, &bytes).key(b"post"))
+                    .await
+                    .expect("send post-drain");
+
+                let mut received = false;
+                for _ in 0..40 {
+                    match tokio::time::timeout(Duration::from_millis(500), consumer_new.recv())
+                        .await
+                    {
+                        Ok(Ok(_msg)) => {
+                            received = true;
+                            break;
+                        }
+                        Ok(Err(_)) | Err(_) => continue,
+                    }
+                }
+                assert!(
+                    received,
+                    "new-generation consumer never received a record; the draining \
+                     old generation did not release the partition",
+                );
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain and shutdown): a manual-commit receiver is
+    /// drained (with nothing in flight) and never sent a subsequent `Shutdown`.
+    /// Guarantees: the receiver returns a `TerminalState` on the drain alone --
+    /// `await_terminal_state` resolves without hanging -- confirming that drain
+    /// completion is the receiver's terminal event and does not depend on a later
+    /// `Shutdown` that the engine never sends to a drained receiver.
+    #[tokio::test]
+    async fn drain_returns_terminal_state_after_notifying() {
+        const TOPIC: &str = "drain-terminal-traces";
+        let group = "drain-terminal-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let cfg =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 60_000, None);
+                let receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Drain with nothing in flight: the drain completes immediately via
+                // the all-acked path and the receiver returns.
+                receiver.drain(Duration::from_secs(10));
+
+                // Returns a terminal state without any Shutdown being sent. If the
+                // receiver waited for a Shutdown, this would hang until the test
+                // harness times out.
+                let _terminal =
+                    tokio::time::timeout(Duration::from_secs(20), receiver.await_terminal_state())
+                        .await
+                        .expect("receiver did not return a terminal state on drain alone");
             },
         )
         .await;
@@ -5436,25 +5740,25 @@ mod tests {
                         .expect("kafka-test: committed-offset probe failed"),
                 );
 
-                receiver.shutdown(Duration::from_secs(5));
+                // Terminates on the drain alone (no Shutdown sent).
                 receiver.await_stopped().await;
             },
         )
         .await;
     }
 
-    /// Scenario (lifecycle: drain and shutdown): a manual-commit receiver holds
-    /// in-flight records that are never acked (their downstream acks are still
-    /// pending) when `DrainIngress` arrives.
-    /// Guarantees: the receiver signals `ReceiverDrained` promptly without
-    /// blocking on the un-acked in-flight records -- codifying the documented
-    /// design that drain does not wait for in-flight downstream acks and relies
-    /// on at-least-once redelivery for the un-committed offsets.
+    /// Scenario (lifecycle: drain does not wait for in-flight acks): a
+    /// manual-commit receiver holds every record in flight (un-acked) when
+    /// `DrainIngress` arrives.
+    /// Guarantees: the receiver reports `ReceiverDrained` promptly WITHOUT waiting
+    /// for the in-flight acks -- drain leaves the group and terminates immediately,
+    /// relying on at-least-once redelivery for the un-acked records instead of
+    /// blocking on downstream completion.
     #[tokio::test]
-    async fn drain_does_not_wait_for_inflight_downstream_acks() {
-        const TOPIC: &str = "drain-inflight-traces";
+    async fn drain_notifies_immediately_without_waiting_for_inflight_acks() {
+        const TOPIC: &str = "drain-wait-traces";
         const RECORDS: usize = 4;
-        let group = "drain-inflight-group";
+        let group = "drain-wait-group";
         with_cluster(
             KafkaTestCluster::builder().topic(TOPIC),
             |cluster| async move {
@@ -5474,20 +5778,241 @@ mod tests {
                 let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
                 let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
 
-                // Consume every record but hold them un-acked: their downstream
-                // acks are deliberately never delivered, so they stay in-flight.
+                // Consume every record but hold them un-acked so they are all in
+                // flight when the drain begins.
                 let mut in_flight = Vec::new();
                 for _ in 0..RECORDS {
                     in_flight.push(receiver.recv_pdata().await);
                 }
 
-                // Begin the drain with the in-flight records still un-acked.
+                // Drain with a generous deadline; the acks are never sent. If the
+                // receiver waited for in-flight acks it would block until the
+                // deadline -- but it must report drained promptly instead.
                 let drain_started = tokio::time::Instant::now();
                 receiver.drain(Duration::from_secs(30));
 
-                // ReceiverDrained must arrive promptly -- well within the drain
-                // deadline -- proving the drain did not block waiting for the
-                // in-flight acks.
+                // ReceiverDrained must arrive promptly even though nothing was
+                // acked (skip startup timer msgs).
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(
+                    drained,
+                    "receiver must report ReceiverDrained without waiting for in-flight acks",
+                );
+                assert!(
+                    drain_started.elapsed() < Duration::from_secs(15),
+                    "drain must not block on in-flight acks ({:?})",
+                    drain_started.elapsed(),
+                );
+
+                drop(in_flight);
+                // Terminates on the drain alone (no Shutdown sent).
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain leaves in-flight uncommitted): a manual-commit
+    /// receiver holds every record in flight (un-acked) when `DrainIngress`
+    /// arrives.
+    /// Guarantees: the un-acked records' offsets are NOT committed by the drain --
+    /// they are left uncommitted for at-least-once redelivery to the new pipeline
+    /// generation -- and the receiver still terminates on the drain alone.
+    #[tokio::test]
+    async fn drain_leaves_unacked_offsets_uncommitted_for_redelivery() {
+        const TOPIC: &str = "drain-deadline-traces";
+        const RECORDS: usize = 4;
+        let group = "drain-deadline-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume every record but never ack them.
+                let mut in_flight = Vec::new();
+                for _ in 0..RECORDS {
+                    in_flight.push(receiver.recv_pdata().await);
+                }
+
+                receiver.drain(Duration::from_secs(10));
+
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // The un-acked records' offsets must NOT be committed: the receiver
+                // leaves them for at-least-once redelivery.
+                let brokers = cluster.bootstrap_servers().to_string();
+                assert!(
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed")
+                        .is_none_or(|o| o < RECORDS as i64),
+                    "un-acked offsets must not be committed at drain",
+                );
+
+                drop(in_flight);
+                // Terminates on the drain alone (no Shutdown sent).
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain commit before notify): a manual-commit receiver
+    /// consumes and acks every record, then receives `DrainIngress`.
+    /// Guarantees: the drain's final commit runs BEFORE `notify_receiver_drained()`
+    /// -- offsets are committed before the receiver reports drained, never after --
+    /// so the acked watermark is durable before downstream shutdown begins. The
+    /// commit is probed without sending `Shutdown`, proving it is issued as part of
+    /// drain completion.
+    #[tokio::test]
+    async fn drain_commits_offsets_before_notifying_drained_not_after() {
+        const TOPIC: &str = "drain-commit-order-traces";
+        const RECORDS: usize = 4;
+        let group = "drain-commit-order-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume and ack every record so its offset is committable at
+                // drain time.
+                for _ in 0..RECORDS {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+
+                // Drain: the final commit runs before notify_receiver_drained().
+                receiver.drain(Duration::from_secs(30));
+
+                // Wait for ReceiverDrained.
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // The final commit runs before notify_receiver_drained(), and the
+                // commit is asynchronous, so the broker must report the full
+                // watermark shortly after drained is observed. Probe without
+                // sending Shutdown first, proving the commit was issued as part
+                // of the drain completion (not the shutdown-time commit).
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed =
+                    poll_until(Duration::from_secs(5), Duration::from_millis(100), || {
+                        committed_offset(&brokers, group, TOPIC, 0)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .is_some_and(|o| o >= RECORDS as i64)
+                    })
+                    .await;
+                assert!(
+                    committed,
+                    "acked offsets must be committed as part of drain completion, got {:?}",
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed"),
+                );
+
+                // Terminates on the drain alone (no Shutdown sent).
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain and shutdown): an auto-commit receiver (which
+    /// has no manual in-flight offset tracker) receives `DrainIngress` while
+    /// records are in-flight.
+    /// Guarantees: the receiver signals `ReceiverDrained` promptly without
+    /// waiting for the deadline, since auto-commit mode has nothing to wait on --
+    /// librdkafka owns commits and the receiver tracks no per-offset state.
+    #[tokio::test]
+    async fn drain_auto_commit_notifies_immediately() {
+        const TOPIC: &str = "drain-auto-traces";
+        const RECORDS: usize = 4;
+        let group = "drain-auto-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = auto_traces_config(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume the records but do not ack (auto-commit ignores acks).
+                let mut in_flight = Vec::new();
+                for _ in 0..RECORDS {
+                    in_flight.push(receiver.recv_pdata().await);
+                }
+
+                // Drain with a long deadline; drained must arrive well before it.
+                let drain_started = tokio::time::Instant::now();
+                receiver.drain(Duration::from_secs(30));
+
                 let mut drained = false;
                 for _ in 0..16 {
                     match receiver.try_recv_runtime(Duration::from_secs(5)).await {
@@ -5501,21 +6026,769 @@ mod tests {
                 }
                 assert!(
                     drained,
-                    "receiver must signal ReceiverDrained without waiting for \
-                     in-flight downstream acks",
+                    "auto-commit receiver never emitted ReceiverDrained"
                 );
                 assert!(
                     drain_started.elapsed() < Duration::from_secs(15),
-                    "drain notification took too long ({:?}); it should not block \
-                     on in-flight acks",
+                    "auto-commit drain should not block on in-flight records ({:?})",
                     drain_started.elapsed(),
                 );
 
-                // The held records are still un-acked; drop them to release the
-                // in-flight set, then terminate cleanly.
                 drop(in_flight);
-                receiver.shutdown(Duration::from_secs(5));
+                // Terminates on the drain alone (no Shutdown sent).
                 receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain commits nacked offsets): a manual-commit
+    /// receiver consumes and terminally NACKs every record (not acks), then
+    /// receives `DrainIngress`.
+    /// Guarantees: a terminal nack advances past the message just like an ack, so
+    /// the drain's final commit commits the nacked offsets (committed offset >= the
+    /// nacked count) rather than leaving them for redelivery, and the receiver
+    /// terminates on the drain alone.
+    #[tokio::test]
+    async fn drain_commits_nacked_offsets() {
+        const TOPIC: &str = "drain-nack-traces";
+        const RECORDS: usize = 4;
+        let group = "drain-nack-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume and terminally nack every record so its offset advances
+                // and is committable at drain time.
+                for _ in 0..RECORDS {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.nack_permanent("drain-nack", pdata);
+                }
+
+                receiver.drain(Duration::from_secs(30));
+
+                // ReceiverDrained must arrive (skip startup timer msgs).
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // A terminal nack advances past the message, so the nacked offsets
+                // must be committed by the drain's final commit.
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed =
+                    poll_until(Duration::from_secs(5), Duration::from_millis(250), || {
+                        committed_offset(&brokers, group, TOPIC, 0)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .is_some_and(|o| o >= RECORDS as i64)
+                    })
+                    .await;
+                assert!(
+                    committed,
+                    "nacked offsets should be committed at drain completion, got {:?}",
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed"),
+                );
+
+                // Terminates on the drain alone (no Shutdown sent).
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain with mixed outcomes): a manual-commit receiver
+    /// resolves its records with a mix of outcomes -- some acked, some terminally
+    /// nacked (permanent and transient) -- and then receives `DrainIngress`.
+    /// Guarantees: both acks and nacks advance offsets, so the drain's final commit
+    /// commits the full contiguous watermark regardless of the ack/nack mix, and
+    /// the receiver terminates on the drain alone.
+    #[tokio::test]
+    async fn drain_commits_full_watermark_after_mixed_acks_and_nacks() {
+        const TOPIC: &str = "drain-mixed-traces";
+        const RECORDS: usize = 4;
+        let group = "drain-mixed-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Resolve the records with a mix of outcomes before draining: ack,
+                // permanent nack, transient nack, ack (so both nack flavors and
+                // both ack positions are exercised). All advance the offset.
+                let records: Vec<_> = {
+                    let mut v = Vec::new();
+                    for _ in 0..RECORDS {
+                        v.push(receiver.recv_pdata().await);
+                    }
+                    v
+                };
+                let mut it = records.into_iter();
+                receiver.ack(it.next().expect("record 0"));
+                receiver.nack_permanent("mixed-perm", it.next().expect("record 1"));
+                receiver.nack_transient("mixed-transient", it.next().expect("record 2"));
+                receiver.ack(it.next().expect("record 3"));
+
+                receiver.drain(Duration::from_secs(30));
+
+                // ReceiverDrained must arrive.
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // Both acks and nacks advance offsets, so the full watermark is
+                // committed by the drain's final commit.
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed =
+                    poll_until(Duration::from_secs(5), Duration::from_millis(250), || {
+                        committed_offset(&brokers, group, TOPIC, 0)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .is_some_and(|o| o >= RECORDS as i64)
+                    })
+                    .await;
+                assert!(
+                    committed,
+                    "mixed ack/nack drain should commit the full watermark, got {:?}",
+                    committed_offset(&brokers, group, TOPIC, 0)
+                        .expect("kafka-test: committed-offset probe failed"),
+                );
+
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: multi-partition drain): a manual-commit receiver owns
+    /// both partitions of a two-partition topic, consumes and acks every record
+    /// across both partitions, then is drained.
+    /// Guarantees: at drain completion the receiver commits the correct per-
+    /// partition watermark for BOTH partitions (not just partition 0), so a
+    /// multi-partition assignment durably commits all owned partitions before
+    /// leaving the group.
+    #[tokio::test]
+    async fn drain_commits_per_partition_watermarks() {
+        const TOPIC: &str = "drain-multipart-traces";
+        let group = "drain-multipart-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic_with(TOPIC, REBALANCE_TEST_PARTITIONS, 1),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                producer
+                    .produce_per_partition(
+                        TOPIC,
+                        REBALANCE_TEST_PARTITIONS,
+                        REBALANCE_RECORDS_PER_PARTITION,
+                        &bytes,
+                    )
+                    .await;
+
+                let cfg =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 60_000, None);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume and ack every record across both partitions so each
+                // partition has a committable watermark at drain time.
+                let total = (REBALANCE_RECORDS_PER_PARTITION * REBALANCE_TEST_PARTITIONS) as usize;
+                for _ in 0..total {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+
+                receiver.drain(Duration::from_secs(30));
+
+                // Wait for ReceiverDrained (skip startup timer msgs).
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // Both partitions must reach their full committed watermark.
+                let brokers = cluster.bootstrap_servers().to_string();
+                for partition in 0..REBALANCE_TEST_PARTITIONS {
+                    let committed =
+                        poll_until(Duration::from_secs(5), Duration::from_millis(250), || {
+                            committed_offset(&brokers, group, TOPIC, partition)
+                                .expect("kafka-test: committed-offset probe failed")
+                                .is_some_and(|o| o >= REBALANCE_RECORDS_PER_PARTITION as i64)
+                        })
+                        .await;
+                    assert!(
+                        committed,
+                        "partition {partition} must commit its watermark at drain, got {:?}",
+                        committed_offset(&brokers, group, TOPIC, partition)
+                            .expect("kafka-test: committed-offset probe failed"),
+                    );
+                }
+
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: multi-partition partial-ack drain): a manual-commit
+    /// receiver owns both partitions of a two-partition topic; every record is
+    /// consumed, but only some are acked before `DrainIngress` while the rest are
+    /// held un-acked.
+    /// Guarantees: the drain's final commit commits offsets for the acked records
+    /// and leaves the un-acked records' offsets uncommitted for at-least-once
+    /// redelivery -- so a partial-ack multi-partition drain neither loses the acked
+    /// progress nor prematurely commits un-acked work.
+    #[tokio::test]
+    async fn drain_partial_ack_leaves_unacked_records_for_redelivery() {
+        const TOPIC: &str = "drain-partial-multipart-traces";
+        let group = "drain-partial-multipart-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic_with(TOPIC, REBALANCE_TEST_PARTITIONS, 1),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                producer
+                    .produce_per_partition(
+                        TOPIC,
+                        REBALANCE_TEST_PARTITIONS,
+                        REBALANCE_RECORDS_PER_PARTITION,
+                        &bytes,
+                    )
+                    .await;
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                let total =
+                    (REBALANCE_RECORDS_PER_PARTITION * REBALANCE_TEST_PARTITIONS) as usize;
+                // Consume every record, but ack only the first half and hold the
+                // rest un-acked so some offsets remain uncommitted at drain time.
+                let acked = total / 2;
+                for i in 0..total {
+                    let pdata = receiver.recv_pdata().await;
+                    if i < acked {
+                        receiver.ack(pdata);
+                    }
+                    // Held pdata are dropped un-acked (their offsets stay tracked
+                    // but uncommitted).
+                }
+
+                receiver.drain(Duration::from_secs(10));
+
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(drained, "receiver never emitted ReceiverDrained");
+
+                // The acked records' offsets must be committed somewhere, while the
+                // total committed across both partitions must not reach the full
+                // produced total (some un-acked offsets are left for redelivery).
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed_sum: i64 = (0..REBALANCE_TEST_PARTITIONS)
+                    .map(|p| {
+                        committed_offset(&brokers, group, TOPIC, p)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .unwrap_or(0)
+                    })
+                    .sum();
+                assert!(
+                    committed_sum >= acked as i64,
+                    "acked offsets ({acked}) should be committed, committed sum was {committed_sum}",
+                );
+                assert!(
+                    committed_sum < total as i64,
+                    "un-acked offsets must not all be committed at drain \
+                     (committed sum {committed_sum} of {total})",
+                );
+
+                receiver.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain with commit failure): a manual-commit receiver
+    /// has acked, committable offsets when `DrainIngress` arrives, but the broker
+    /// is configured to reject the drain-time offset-commit requests.
+    /// Guarantees: the commit failure is non-fatal -- the receiver still reports
+    /// `ReceiverDrained`, leaves the consumer group, and terminates within a
+    /// bounded wait (it does not hang or error out); the offsets that failed to
+    /// commit are safe for at-least-once redelivery.
+    #[tokio::test]
+    async fn drain_commit_failure_still_terminates_cleanly() {
+        const TOPIC: &str = "drain-commit-fail-traces";
+        const RECORDS: usize = 3;
+        let group = "drain-commit-fail-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                for _ in 0..RECORDS {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+
+                // Reject the drain-time commit requests so the commit path fails.
+                cluster.faults().fail_offset_commits(&[
+                    RDKafkaRespErr::RD_KAFKA_RESP_ERR_REBALANCE_IN_PROGRESS,
+                    RDKafkaRespErr::RD_KAFKA_RESP_ERR_REBALANCE_IN_PROGRESS,
+                    RDKafkaRespErr::RD_KAFKA_RESP_ERR_REBALANCE_IN_PROGRESS,
+                ]);
+
+                receiver.drain(Duration::from_secs(3));
+
+                // Despite the commit failure the receiver must still report drained.
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(
+                    drained,
+                    "receiver must still report drained when the drain-time commit fails",
+                );
+
+                // And it must terminate within a bounded wait rather than hang.
+                let terminated =
+                    tokio::time::timeout(Duration::from_secs(10), receiver.await_terminal_state())
+                        .await;
+                assert!(
+                    terminated.is_ok(),
+                    "receiver must terminate on drain even when offset commit fails",
+                );
+
+                // Restore commit behavior for clean teardown.
+                cluster.faults().clear_offset_commit_failures();
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain with slow broker): a manual-commit receiver is
+    /// drained while the broker round-trip time is inflated far past the drain
+    /// deadline, so the drain-time group-leave/close cannot complete promptly.
+    /// Guarantees: the receiver still reaches its terminal state within a bounded
+    /// wait rather than stalling the pipeline -- the synchronous librdkafka
+    /// unsubscribe/close runs off the loop thread bounded by the drain deadline,
+    /// exactly as it does on the shutdown path.
+    #[tokio::test]
+    async fn drain_with_slow_broker_terminates_within_deadline() {
+        const TOPIC: &str = "drain-slow-broker-traces";
+        const RECORDS: usize = 3;
+        let group = "drain-slow-broker-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                for i in 0..RECORDS {
+                    let key = format!("rec-{i}");
+                    producer
+                        .send_full(SendRecord::new(TOPIC, &bytes).key(key.as_bytes()))
+                        .await
+                        .expect("send record");
+                }
+
+                let cfg = manual_traces_config_no_timer(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                for _ in 0..RECORDS {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+
+                // Inflate broker latency so the drain-time close is delayed well
+                // past the drain deadline. A large round-trip delay stands in for a
+                // slow/unreachable broker but still lets the off-thread close
+                // eventually finish so the blocking thread joins on teardown.
+                cluster.faults().round_trip_time(1, Duration::from_secs(30));
+
+                // Drain with a short (1s) deadline while the broker is effectively
+                // unavailable. The off-loop-thread close is bounded by this
+                // deadline, so termination must happen well within the generous
+                // outer bound below.
+                let drain_at = tokio::time::Instant::now();
+                receiver.drain(Duration::from_secs(1));
+                let terminated =
+                    tokio::time::timeout(Duration::from_secs(5), receiver.await_terminal_state())
+                        .await;
+                assert!(
+                    terminated.is_ok(),
+                    "receiver must terminate within the bounded drain deadline even \
+                     when the broker is slow",
+                );
+                assert!(
+                    drain_at.elapsed() < Duration::from_secs(5),
+                    "termination should be bounded by the drain deadline, not the 30s \
+                     broker round-trip delay; took {:?}",
+                    drain_at.elapsed(),
+                );
+
+                // Restore normal broker latency so the (deadline-exceeded)
+                // off-thread close can finish and its blocking thread joins.
+                cluster
+                    .faults()
+                    .round_trip_time(1, Duration::from_millis(1));
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: reconfiguration cutover, auto-commit): an auto-commit
+    /// receiver (modeling the old pipeline generation) owns the topic's partition;
+    /// a second consumer in the SAME group (modeling the new generation) joins and
+    /// subscribes; the receiver is drained.
+    /// Guarantees: even in auto-commit mode the drained receiver leaves the
+    /// consumer group, so the second consumer is assigned the partition promptly
+    /// and receives a post-drain record -- proving the auto-commit drain path
+    /// hands off partitions to the new generation, not just the manual-commit path.
+    #[tokio::test]
+    async fn drain_auto_commit_leaves_group_so_new_consumer_gets_partitions() {
+        const TOPIC: &str = "drain-cutover-auto-traces";
+        let group = "drain-cutover-auto-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic(TOPIC),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                producer
+                    .send_full(SendRecord::new(TOPIC, &bytes).key(b"pre"))
+                    .await
+                    .expect("send pre-drain");
+
+                let cfg = auto_traces_config(cluster.bootstrap_servers(), group, TOPIC);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // The old generation consumes the record so it demonstrably owns
+                // the partition.
+                let _pdata = receiver.recv_pdata().await;
+
+                // The new-generation consumer joins the same group while the old
+                // generation is still a member.
+                let consumer_new: StreamConsumer = ClientConfig::new()
+                    .set("bootstrap.servers", cluster.bootstrap_servers())
+                    .set("group.id", group)
+                    .set("enable.auto.commit", "false")
+                    .set("auto.offset.reset", "latest")
+                    .create()
+                    .expect("failed to create new-generation consumer");
+                consumer_new
+                    .subscribe(&[TOPIC])
+                    .expect("new-generation consumer subscribe");
+
+                // Drain the old generation; once it completes it leaves the group.
+                receiver.drain(Duration::from_secs(10));
+                receiver.await_stopped().await;
+
+                // The new consumer must now own the partition and receive a
+                // post-drain record within a bounded window.
+                producer
+                    .send_full(SendRecord::new(TOPIC, &bytes).key(b"post"))
+                    .await
+                    .expect("send post-drain");
+
+                let mut received = false;
+                for _ in 0..40 {
+                    match tokio::time::timeout(Duration::from_millis(500), consumer_new.recv())
+                        .await
+                    {
+                        Ok(Ok(_msg)) => {
+                            received = true;
+                            break;
+                        }
+                        Ok(Err(_)) | Err(_) => continue,
+                    }
+                }
+                assert!(
+                    received,
+                    "new-generation consumer never received a record; the draining \
+                     auto-commit old generation did not release the partition",
+                );
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: reconfiguration cutover, two receivers): two full
+    /// receiver harnesses (A = old generation, B = new generation) run in the same
+    /// group on a two-partition topic; after both are members, receiver A is
+    /// drained.
+    /// Guarantees: after A drains and leaves the group, receiver B takes over the
+    /// partitions and consumes records produced after the drain -- so a live
+    /// reconfiguration cutover between two real receivers hands work to the new
+    /// generation without losing post-drain records.
+    #[tokio::test]
+    async fn drain_hands_off_to_second_receiver_without_loss() {
+        const TOPIC: &str = "drain-cutover-two-traces";
+        let group = "drain-cutover-two-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic_with(TOPIC, REBALANCE_TEST_PARTITIONS, 1),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                // Receiver A (old generation) starts alone and owns every
+                // partition. Consume and ack one wave so it demonstrably owns the
+                // topic.
+                let cfg_a =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 500, None);
+                let mut receiver_a = KafkaReceiverHarness::start(&cluster, cfg_a);
+
+                producer
+                    .produce_per_partition(
+                        TOPIC,
+                        REBALANCE_TEST_PARTITIONS,
+                        REBALANCE_RECORDS_PER_PARTITION,
+                        &bytes,
+                    )
+                    .await;
+                let wave = (REBALANCE_RECORDS_PER_PARTITION * REBALANCE_TEST_PARTITIONS) as usize;
+                for _ in 0..wave {
+                    let pdata = receiver_a.recv_pdata().await;
+                    receiver_a.ack(pdata);
+                }
+
+                // Receiver B (new generation) joins the same group.
+                let cfg_b =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 500, None);
+                let mut receiver_b = KafkaReceiverHarness::start(&cluster, cfg_b);
+
+                // Drain A. Once it completes it leaves the group, so B ends up
+                // owning every partition.
+                receiver_a.drain(Duration::from_secs(10));
+                receiver_a.await_stopped().await;
+
+                // Produce a fresh wave after the cutover; B must receive it. Bound
+                // the wait so a failed handoff fails loudly instead of hanging.
+                producer
+                    .produce_per_partition(
+                        TOPIC,
+                        REBALANCE_TEST_PARTITIONS,
+                        REBALANCE_RECORDS_PER_PARTITION,
+                        &bytes,
+                    )
+                    .await;
+
+                let expected_b = wave;
+                let mut delivered_b = 0usize;
+                let b_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                while delivered_b < expected_b {
+                    assert!(
+                        tokio::time::Instant::now() < b_deadline,
+                        "timed out: receiver B consumed {delivered_b} of {expected_b} \
+                         post-cutover records; the drain handoff did not give B the \
+                         partitions",
+                    );
+                    if let Some(pdata) = receiver_b.try_recv_pdata(Duration::from_millis(250)).await
+                    {
+                        receiver_b.ack(pdata);
+                        delivered_b += 1;
+                    }
+                }
+
+                receiver_b.shutdown(Duration::from_secs(5));
+                receiver_b.await_stopped().await;
+            },
+        )
+        .await;
+    }
+
+    /// Scenario (lifecycle: drain racing a rebalance): a manual-commit receiver
+    /// owns both partitions of a two-partition topic with acked, committable
+    /// offsets; a second group member joins to force a partition revocation at
+    /// roughly the same time the receiver is drained.
+    /// Guarantees: the receiver completes the drain and terminates cleanly even
+    /// when a rebalance is revoking a partition concurrently -- it neither panics
+    /// nor hangs -- and it commits the offsets for the work it acked, so a
+    /// drain/rebalance race does not lose progress or stall termination.
+    #[tokio::test]
+    async fn drain_concurrent_with_rebalance_completes_cleanly() {
+        const TOPIC: &str = "drain-rebalance-race-traces";
+        let group = "drain-rebalance-race-group";
+        with_cluster(
+            KafkaTestCluster::builder().topic_with(TOPIC, REBALANCE_TEST_PARTITIONS, 1),
+            |cluster| async move {
+                let producer = cluster.producer().build();
+                let req = create_traces_with_spans();
+                let mut bytes = vec![];
+                req.encode(&mut bytes).expect("encode");
+
+                producer
+                    .produce_per_partition(
+                        TOPIC,
+                        REBALANCE_TEST_PARTITIONS,
+                        REBALANCE_RECORDS_PER_PARTITION,
+                        &bytes,
+                    )
+                    .await;
+
+                let cfg =
+                    manual_traces_config(cluster.bootstrap_servers(), group, TOPIC, 500, None);
+                let mut receiver = KafkaReceiverHarness::start(&cluster, cfg);
+
+                // Consume and ack every record so both partitions have committable
+                // offsets before the race.
+                let total = (REBALANCE_RECORDS_PER_PARTITION * REBALANCE_TEST_PARTITIONS) as usize;
+                for _ in 0..total {
+                    let pdata = receiver.recv_pdata().await;
+                    receiver.ack(pdata);
+                }
+
+                // Force a rebalance and drain at roughly the same time so the
+                // drain-completion check runs while a partition revocation is in
+                // flight. A second group member is subscribed inline but NOT polled
+                // to assignment before the drain: its join starts a rebalance in the
+                // background, then the receiver is drained immediately, racing the
+                // revocation against drain completion.
+                let trigger_consumer: StreamConsumer = ClientConfig::new()
+                    .set("bootstrap.servers", cluster.bootstrap_servers())
+                    .set("group.id", group)
+                    .set("enable.auto.commit", "false")
+                    .set("auto.offset.reset", "earliest")
+                    .create()
+                    .expect("failed to create rebalance-trigger consumer");
+                trigger_consumer
+                    .subscribe(&[TOPIC])
+                    .expect("rebalance-trigger subscribe");
+                receiver.drain(Duration::from_secs(10));
+
+                // The receiver must still report drained and terminate cleanly.
+                let mut drained = false;
+                for _ in 0..16 {
+                    match receiver.try_recv_runtime(Duration::from_secs(10)).await {
+                        Some(RuntimeControlMsg::ReceiverDrained { .. }) => {
+                            drained = true;
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => break,
+                    }
+                }
+                assert!(
+                    drained,
+                    "receiver must report drained even when a rebalance races the drain",
+                );
+
+                let terminated =
+                    tokio::time::timeout(Duration::from_secs(10), receiver.await_terminal_state())
+                        .await;
+                assert!(
+                    terminated.is_ok(),
+                    "receiver must terminate cleanly when a rebalance races the drain",
+                );
+
+                // The offsets acked before the race must be committed for at least
+                // one partition (the receiver retained and committed what it owned).
+                let brokers = cluster.bootstrap_servers().to_string();
+                let committed_sum: i64 = (0..REBALANCE_TEST_PARTITIONS)
+                    .map(|p| {
+                        committed_offset(&brokers, group, TOPIC, p)
+                            .expect("kafka-test: committed-offset probe failed")
+                            .unwrap_or(0)
+                    })
+                    .sum();
+                assert!(
+                    committed_sum >= REBALANCE_RECORDS_PER_PARTITION as i64,
+                    "drain racing a rebalance must still commit the acked offsets it \
+                     owned, committed sum was {committed_sum}",
+                );
+
+                drop(trigger_consumer);
             },
         )
         .await;

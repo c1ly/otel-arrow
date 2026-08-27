@@ -41,7 +41,7 @@ config:
 | `brokers` | string | **required** | Comma-separated list of Kafka broker addresses. |
 | `group_id` | string | **required** | Kafka consumer group ID. |
 | `client_id` | string | **required** | Kafka client ID. |
-| `group_instance_id` | string | *none* | Static group instance ID for Kafka static membership. On a multi-core pipeline the configured value is automatically suffixed with the pipeline core ID (e.g. `instance-1` becomes `instance-1-0`, `instance-1-1`, ...) so each core is a distinct static member. |
+| `group_instance_id` | string | *none* | Static group instance ID for Kafka static membership. The configured value is automatically suffixed with the deployment generation (e.g. `instance-1` becomes `instance-1-gen0`), and additionally with the pipeline core ID on a multi-core pipeline (e.g. `instance-1-0-gen0`, `instance-1-1-gen0`, ...). The generation suffix keeps a newly-launched pipeline generation from being fenced by the still-draining previous generation during a live reconfiguration; consequently the static-member identity is not stable across reconfigurations (each generation is a distinct static member). |
 | `auth` | object | *none* | Authentication configuration (see [Authentication](#authentication)). |
 | `tls` | object | *none* | TLS configuration for broker connections (see [TLS Configuration](#tls-configuration)). |
 | `traces` | object | `{}` | Per-signal config for traces (see [Per-Signal Configuration](#per-signal-configuration)). |
@@ -991,8 +991,8 @@ an empty assignment resets it to zero.
 | `kafka.transport_error` | `error` | A Kafka transport-level error occurred (non-fatal, consumer continues). |
 | `kafka.capture_policy.limits_exceeded` | `error` | Transport header capture exceeded configured limits. |
 | `kafka.topic_id.exhausted` | `error` | The topic ID space was exhausted; the message was dropped to avoid a colliding ID. |
-| `kafka.receiver.drain_ingress` | `info` | Receiver-first drain started; the receiver stops admitting new Kafka records. |
-| `kafka.drain.commit_failed` | `error` | Offset commit during ingress drain failed (non-fatal). |
+| `kafka.receiver.drain_ingress` | `info` | Receiver-first drain: the receiver commits the offsets acked so far, reports drained, immediately leaves the consumer group, and terminates. It does not wait for in-flight messages; their offsets are left uncommitted for at-least-once redelivery to the new pipeline generation. Includes a `pending` count of in-flight messages. |
+| `kafka.drain.commit_failed` | `error` | The drain-time offset commit failed (non-fatal); the receiver still leaves the group and terminates, and the uncommitted offsets redeliver. |
 | `kafka.commit.async_failed` | `error` | An asynchronous offset commit was rejected by the broker (observed on the commit callback). |
 | `kafka.rebalance.partitions_assigned` | `info` | Partitions newly assigned during a rebalance (includes `count`, a `partitions` list truncated with a trailing `...` when it exceeds the entry cap, `listed_count`, and `truncated`). |
 | `kafka.rebalance.partitions_revoked` | `info` | Owned partitions revoked during a rebalance (includes `count`, a `partitions` list truncated with a trailing `...` when it exceeds the entry cap, `listed_count`, and `truncated`). |
