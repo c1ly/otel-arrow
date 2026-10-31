@@ -2,8 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Handles mapping attributes defined in a resolved registry to a KeyValue pair for a otlp signal
+//!
+//! Attribute values are chosen in this order:
+//!
+//! 1. The `traffic-generator` annotation on the resolved attribute (which, for
+//!    Weaver v1 references, is either the reference's or the definition's
+//!    annotation).
+//! 2. Enum members, sampled uniformly.
+//! 3. `examples`, sampled uniformly.
+//! 4. A type default.
 
 use otel_arrow_dfe_pdata::proto::opentelemetry::common::v1::{AnyValue, KeyValue};
+use rand::Rng;
 use rand::seq::IndexedRandom;
 use weaver_resolved_schema::v1::attribute::Attribute;
 use weaver_semconv::v1::attribute::ValueSpec;
@@ -11,11 +21,78 @@ use weaver_semconv::v1::attribute::{
     AttributeType, Examples, PrimitiveOrArrayTypeSpec, TemplateTypeSpec,
 };
 
+use super::annotation::{self, AttributeSpec, Scalar};
+use super::sampler::{sample_count, sample_string, sample_value};
+
+fn scalar_to_any(value: Scalar) -> AnyValue {
+    match value {
+        Scalar::Int(i) => AnyValue::new_int(i),
+        Scalar::Double(d) => AnyValue::new_double(d),
+        Scalar::String(s) => AnyValue::new_string(s),
+        Scalar::Bool(b) => AnyValue::new_bool(b),
+    }
+}
+
+fn semconv_to_any(value: &ValueSpec) -> AnyValue {
+    match value {
+        ValueSpec::Int(i) => AnyValue::new_int(*i),
+        ValueSpec::Double(d) => AnyValue::new_double(f64::from(*d)),
+        ValueSpec::String(s) => AnyValue::new_string(s.clone()),
+        ValueSpec::Bool(b) => AnyValue::new_bool(*b),
+    }
+}
+
+/// Whether continuous samples for this attribute type should be integers.
+const fn is_int_type(ty: &AttributeType) -> bool {
+    matches!(
+        ty,
+        AttributeType::PrimitiveOrArray(
+            PrimitiveOrArrayTypeSpec::Int | PrimitiveOrArrayTypeSpec::Ints
+        ) | AttributeType::Template(TemplateTypeSpec::Int | TemplateTypeSpec::Ints)
+    )
+}
+
+/// Sample the value part of an annotation spec.
+fn sample_spec<R: Rng + ?Sized>(spec: &AttributeSpec, integer: bool, rng: &mut R) -> AnyValue {
+    match spec {
+        AttributeSpec::Scalar(v) => scalar_to_any(sample_value(v, integer, rng)),
+        AttributeSpec::Array { length, items } => {
+            let n = sample_count(length, rng);
+            AnyValue::new_array(
+                (0..n)
+                    .map(|_| scalar_to_any(sample_value(items, integer, rng)))
+                    .collect::<Vec<_>>(),
+            )
+        }
+        AttributeSpec::Template { value, .. } => sample_spec(value, integer, rng),
+    }
+}
+
 /// For the given attribute, return a name/value pair.
-/// Values are generated based on the attribute type and examples where possible.
-#[must_use]
-pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
-    let mut rng = rand::rng();
+///
+/// The value comes from the attribute's `traffic-generator` annotation when
+/// present, otherwise from enum members, then examples, then a type default.
+/// Annotations are validated when the registry is loaded; if one fails to
+/// parse here the attribute falls back to the non-annotated behavior.
+pub fn get_attribute_name_value<R: Rng + ?Sized>(attribute: &Attribute, rng: &mut R) -> KeyValue {
+    if let Ok(Some(map)) = annotation::lookup(attribute.annotations.as_ref())
+        && let Ok(spec) = annotation::parse_attribute_spec(map, &attribute.r#type)
+    {
+        let integer = is_int_type(&attribute.r#type);
+        let value = sample_spec(&spec, integer, rng);
+        let name = match &spec {
+            AttributeSpec::Template { keys, .. } => {
+                format!("{}.{}", attribute.name, sample_string(keys, rng))
+            }
+            _ => attribute.name.clone(),
+        };
+        return KeyValue::new(name, value);
+    }
+    fallback_name_value(attribute, rng)
+}
+
+/// Enum / example / default based value generation used when no annotation is present.
+fn fallback_name_value<R: Rng + ?Sized>(attribute: &Attribute, rng: &mut R) -> KeyValue {
     let name = attribute.name.clone();
     match &attribute.r#type {
         AttributeType::PrimitiveOrArray(primitive_or_array) => {
@@ -24,14 +101,14 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                 PrimitiveOrArrayTypeSpec::Int => match &attribute.examples {
                     Some(Examples::Int(i)) => AnyValue::new_int(*i),
                     Some(Examples::Ints(ints)) => {
-                        AnyValue::new_int(*ints.choose(&mut rng).unwrap_or(&42))
+                        AnyValue::new_int(*ints.choose(rng).unwrap_or(&42))
                     }
                     _ => AnyValue::new_int(42),
                 },
                 PrimitiveOrArrayTypeSpec::Double => match &attribute.examples {
                     Some(Examples::Double(d)) => AnyValue::new_double(f64::from(*d)),
                     Some(Examples::Doubles(doubles)) => AnyValue::new_double(f64::from(
-                        *doubles.choose(&mut rng).unwrap_or(&(3.13).into()),
+                        *doubles.choose(rng).unwrap_or(&(3.13).into()),
                     )),
                     _ => AnyValue::new_double(3.13),
                 },
@@ -39,7 +116,7 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     Some(Examples::String(s)) => AnyValue::new_string(s.to_string()),
                     Some(Examples::Strings(strings)) => AnyValue::new_string(
                         strings
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&"value".to_owned())
                             .clone()
                             .to_string(),
@@ -50,11 +127,11 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     // Boolean-based examples
                     Some(Examples::Bool(b)) => AnyValue::new_bool(*b),
                     Some(Examples::Bools(booleans)) => {
-                        AnyValue::new_bool(*booleans.choose(&mut rng).unwrap_or(&true))
+                        AnyValue::new_bool(*booleans.choose(rng).unwrap_or(&true))
                     }
                     Some(Examples::ListOfBools(list_of_bools)) => AnyValue::new_array(
                         list_of_bools
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec![true, false])
                             .iter()
                             .map(|b| AnyValue::new_bool(*b))
@@ -64,11 +141,11 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     // Integer-based examples
                     Some(Examples::Int(i)) => AnyValue::new_int(*i),
                     Some(Examples::Ints(ints)) => {
-                        AnyValue::new_int(*ints.choose(&mut rng).unwrap_or(&42))
+                        AnyValue::new_int(*ints.choose(rng).unwrap_or(&42))
                     }
                     Some(Examples::ListOfInts(list_of_ints)) => AnyValue::new_array(
                         list_of_ints
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec![42, 43])
                             .iter()
                             .map(|i| AnyValue::new_int(*i))
@@ -77,11 +154,11 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     // Double-based examples
                     Some(Examples::Double(d)) => AnyValue::new_double(f64::from(*d)),
                     Some(Examples::Doubles(doubles)) => AnyValue::new_double(f64::from(
-                        *doubles.choose(&mut rng).unwrap_or(&(3.13).into()),
+                        *doubles.choose(rng).unwrap_or(&(3.13).into()),
                     )),
                     Some(Examples::ListOfDoubles(list_of_doubles)) => AnyValue::new_array(
                         list_of_doubles
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec![(3.13).into(), (3.15).into()])
                             .iter()
                             .map(|d| AnyValue::new_double(f64::from(*d)))
@@ -91,14 +168,14 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     Some(Examples::String(s)) => AnyValue::new_string(s.clone()),
                     Some(Examples::Strings(strings)) => AnyValue::new_string(
                         strings
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&"value".to_owned())
                             .clone()
                             .to_string(),
                     ),
                     Some(Examples::ListOfStrings(list_of_strings)) => AnyValue::new_array(
                         list_of_strings
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec!["value1".to_string(), "value2".to_string()])
                             .iter()
                             .map(AnyValue::new_string)
@@ -111,7 +188,7 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                         ValueSpec::Bool(v) => AnyValue::new_bool(*v),
                     },
                     Some(Examples::Anys(anys)) => anys
-                        .choose(&mut rng)
+                        .choose(rng)
                         .map(|v| match v {
                             ValueSpec::Int(v) => AnyValue::new_int(*v),
                             ValueSpec::Double(v) => AnyValue::new_double(f64::from(*v)),
@@ -133,7 +210,7 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     ),
                     Some(Examples::ListOfInts(list_of_ints)) => AnyValue::new_array(
                         list_of_ints
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec![42, 43])
                             .iter()
                             .map(|i| AnyValue::new_int(*i))
@@ -150,7 +227,7 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     ),
                     Some(Examples::ListOfDoubles(list_of_doubles)) => AnyValue::new_array(
                         list_of_doubles
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec![(3.13).into(), (3.15).into()])
                             .iter()
                             .map(|d| AnyValue::new_double(f64::from(*d)))
@@ -167,7 +244,7 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
                     ),
                     Some(Examples::ListOfStrings(list_of_strings)) => AnyValue::new_array(
                         list_of_strings
-                            .choose(&mut rng)
+                            .choose(rng)
                             .unwrap_or(&vec!["value1".to_string(), "value2".to_string()])
                             .iter()
                             .map(AnyValue::new_string)
@@ -182,12 +259,10 @@ pub fn get_attribute_name_value(attribute: &Attribute) -> KeyValue {
             KeyValue::new(name, value)
         }
         AttributeType::Enum { members, .. } => {
-            let value = match &members[0].value {
-                ValueSpec::String(s) => AnyValue::new_string(s.clone()),
-                ValueSpec::Int(i) => AnyValue::new_int(*i),
-                ValueSpec::Double(d) => AnyValue::new_double(f64::from(*d)),
-                ValueSpec::Bool(b) => AnyValue::new_bool(*b),
-            };
+            let value = members
+                .choose(rng)
+                .map(|m| semconv_to_any(&m.value))
+                .unwrap_or_else(|| AnyValue::new_string("value".to_string()));
             KeyValue::new(name, value)
         }
         AttributeType::Template(template_type_spec) => {

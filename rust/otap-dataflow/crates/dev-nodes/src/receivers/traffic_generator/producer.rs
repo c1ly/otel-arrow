@@ -450,7 +450,8 @@ pub trait SignalGenerator {
 /// Signal generator backed by the Weaver semantic conventions registry.
 ///
 /// Produces signals whose attributes are derived from the resolved registry,
-/// giving realistic cardinality and naming.
+/// giving realistic cardinality and naming. Values are driven by the
+/// registry's `traffic-generator` annotations where present.
 pub struct WeaverGenerator {
     registry: ResolvedRegistry,
 }

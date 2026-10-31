@@ -73,6 +73,31 @@ config:
 Transport-header names preserve their configured spelling. Names that differ
 only by case remain distinct stored context entries.
 
+## Semantic convention annotations
+
+With `data_source: semantic_conventions`, attribute values, metric values,
+histogram buckets, span durations and status, and log severities are driven
+by `traffic-generator` annotations in the registry. Each annotation lists
+acceptable `values` (optionally `weights`) or a `range` with an optional
+`distribution` (`uniform`, `normal`, `lognormal`, `exponential`, `zipf`):
+
+```yaml
+- id: http.response.status_code
+  type: int
+  annotations:
+    traffic-generator:
+      values: [200, 404, 500]
+      weights: [90, 7, 3]
+```
+
+The vendored registry in `vendor/semconv/model` is annotated. Point
+`registry_path` at that directory to use it; the default upstream registry has
+no annotations, so values fall back to examples, enum members, and type
+defaults. Invalid annotations fail receiver startup with the group, attribute,
+and key path of each error. See
+[traffic_generator_annotation.md](traffic_generator_annotation.md) for the full
+specification.
+
 ## Purpose
 
 Verify that a **single traffic-gen sender core can saturate a single

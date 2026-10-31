@@ -21,11 +21,17 @@ const VENDOR_DIR: &str = "vendor/semconv";
 /// File holding the upstream tag the vendored copy was taken from.
 const VERSION_FILE: &str = "VERSION";
 
-const USAGE: &str = "Usage: cargo xtask update-semconv [--version <vX.Y.Z>]";
+/// Annotation namespace added to the vendored registry for the traffic generator.
+const TRAFFIC_GENERATOR_ANNOTATION: &str = "traffic-generator:";
+
+const USAGE: &str = "Usage: cargo xtask update-semconv [--version <vX.Y.Z>] [--drop-annotations]";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
     version: Option<String>,
+    /// Allow replacing a vendored tree that carries `traffic-generator`
+    /// annotations (they are lost and must be re-applied).
+    drop_annotations: bool,
 }
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
@@ -36,6 +42,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         None => read_vendored_version(&vendor_dir)?,
     };
     validate_version(&version)?;
+    ensure_annotations_may_be_dropped(&vendor_dir.join("model"), options.drop_annotations)?;
 
     let scratch_dir = workspace_root()
         .join("target")
@@ -65,10 +72,65 @@ fn parse_args(args: &[String]) -> anyhow::Result<Options> {
                 };
                 options.version = Some(version.clone());
             }
+            "--drop-annotations" => options.drop_annotations = true,
             _ => bail!("Unknown `cargo xtask update-semconv` argument: {arg}\n{USAGE}"),
         }
     }
     Ok(options)
+}
+
+/// Refuses to replace a vendored model that carries `traffic-generator`
+/// annotations unless `drop_annotations` is set.
+///
+/// The vendored registry is annotated in place for the traffic generator
+/// receiver; replacing `model/` would silently delete those annotations.
+fn ensure_annotations_may_be_dropped(
+    model_dir: &Path,
+    drop_annotations: bool,
+) -> anyhow::Result<()> {
+    if drop_annotations || !model_dir.is_dir() {
+        return Ok(());
+    }
+    let annotated = annotated_files(model_dir)?;
+    if annotated.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "{} file(s) under {} carry `traffic-generator` annotations (for example {}). \
+         Updating would delete them. Re-run with --drop-annotations to replace the model \
+         anyway and re-apply the annotations afterwards (see \
+         crates/dev-nodes/src/receivers/traffic_generator/temp-annotation-revisit.md).",
+        annotated.len(),
+        model_dir.display(),
+        annotated[0].display()
+    );
+}
+
+/// Returns the YAML files under `dir` that contain a `traffic-generator` key.
+fn annotated_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)
+            .with_context(|| format!("failed to read {}", current.display()))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "yaml") {
+                let contents = std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read {}", path.display()))?;
+                if contents
+                    .lines()
+                    .any(|l| l.trim_start().starts_with(TRAFFIC_GENERATOR_ANNOTATION))
+                {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// The workspace root is the parent of the xtask crate.
@@ -223,6 +285,52 @@ mod tests {
     fn parse_args_accepts_version() {
         let options = parse_args(&args(&["--version", "v1.44.0"])).unwrap();
         assert_eq!(options.version.as_deref(), Some("v1.44.0"));
+    }
+
+    #[test]
+    fn parse_args_accepts_drop_annotations() {
+        let options = parse_args(&args(&["--drop-annotations"])).unwrap();
+        assert!(options.drop_annotations);
+        assert_eq!(options.version, None);
+    }
+
+    /// Scenario: The vendored model contains a `traffic-generator` annotation
+    /// and update-semconv is run with and without `--drop-annotations`.
+    /// Guarantees: The update is refused by default so annotations are not
+    /// silently deleted, and allowed only with the explicit flag.
+    #[test]
+    fn annotated_model_requires_drop_annotations() {
+        let root = scratch("annotated");
+        let model = root.join("model");
+        std::fs::create_dir_all(model.join("http")).unwrap();
+        std::fs::write(model.join("plain.yaml"), "groups: []\n").unwrap();
+        ensure_annotations_may_be_dropped(&model, false).unwrap();
+
+        std::fs::write(
+            model.join("http/registry.yaml"),
+            "groups:\n  - id: x\n    annotations:\n      traffic-generator:\n        values: [1]\n",
+        )
+        .unwrap();
+        let err = ensure_annotations_may_be_dropped(&model, false).unwrap_err();
+        assert!(err.to_string().contains("--drop-annotations"));
+        ensure_annotations_may_be_dropped(&model, true).unwrap();
+        assert_eq!(
+            annotated_files(&model).unwrap(),
+            vec![model.join("http/registry.yaml")]
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Scenario: The checked-in vendored registry is scanned.
+    /// Guarantees: It is detected as annotated, so update-semconv protects it.
+    #[test]
+    fn vendored_model_is_annotated() {
+        assert!(
+            !annotated_files(&workspace_root().join(VENDOR_DIR).join("model"))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

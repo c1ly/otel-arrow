@@ -16,6 +16,8 @@ use weaver_forge::v1::registry::ResolvedRegistry;
 use weaver_resolver::{DefaultSchemaVisitor, WeaverResolver, WeaverResolverConfig};
 use weaver_semconv::registry_repo::RegistryRepo;
 
+use super::annotation::{format_errors, validate_registry};
+
 /// Source of telemetry data schema and attributes
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -292,6 +294,9 @@ impl Config {
 
     /// Provide a reference to the ResolvedRegistry.
     /// Returns None if data_source is Synthetic.
+    ///
+    /// Every `traffic-generator` annotation in the registry is validated; an
+    /// error lists each invalid annotation (group, attribute, key path).
     pub fn get_registry(&self) -> Result<Option<ResolvedRegistry>, String> {
         let mut semconv_errors = Vec::new();
         match self.data_source {
@@ -320,6 +325,10 @@ impl Config {
                     resolved_schema.catalog(),
                 )
                 .map_err(|err| err.to_string())?;
+
+                // Reject invalid `traffic-generator` annotations up front so
+                // they fail startup instead of silently falling back.
+                validate_registry(&resolved_registry).map_err(|errors| format_errors(&errors))?;
 
                 Ok(Some(resolved_registry))
             }
@@ -464,6 +473,28 @@ pub fn default_registry_path() -> VirtualDirectoryPath {
         sub_folder: Some("model".to_owned()),
         refspec: Some(SEMCONV_REGISTRY_REFSPEC.to_owned()),
     }
+}
+
+/// Path of the vendored semantic conventions registry in this workspace.
+///
+/// The vendored copy (`vendor/semconv/model`) carries the
+/// `traffic-generator` annotations and lets tests run without network access.
+/// It is resolved relative to this crate at compile time, so it is only
+/// meaningful for tests and tools run from within the repository.
+#[must_use]
+pub fn vendored_registry_path() -> VirtualDirectoryPath {
+    VirtualDirectoryPath::LocalFolder {
+        path: vendored_semconv_dir()
+            .join("model")
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+/// Directory of the vendored semantic conventions copy (`vendor/semconv`).
+#[must_use]
+pub fn vendored_semconv_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/semconv")
 }
 
 const fn default_enable_ack_nack() -> bool {

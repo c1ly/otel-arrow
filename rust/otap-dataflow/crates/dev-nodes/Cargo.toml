@@ -24,11 +24,14 @@ otel-arrow-dfe-telemetry-macros = { workspace = true }
 
 async-trait.workspace = true
 humantime-serde.workspace = true
+libm.workspace = true
 linkme.workspace = true
 prost.workspace = true
 rand.workspace = true
+rand_distr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 weaver_common.workspace = true
