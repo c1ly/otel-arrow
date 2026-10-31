@@ -5,6 +5,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -18,6 +25,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -31,6 +45,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -44,6 +65,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -62,6 +90,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -80,6 +115,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -98,6 +140,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -117,6 +166,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -135,6 +191,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -153,6 +216,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -171,6 +241,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -189,6 +266,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -208,6 +292,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -226,6 +317,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -239,6 +337,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -254,6 +359,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -272,6 +384,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -291,6 +410,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -309,6 +435,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     entity_associations:
       - k8s.replicaset
@@ -327,6 +460,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Deprecated, use `k8s.statefulset.pod.desired` instead."
     entity_associations:
@@ -345,6 +485,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -363,6 +510,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -381,6 +535,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -399,6 +560,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -417,6 +585,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -435,6 +610,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -453,6 +635,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -471,6 +660,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -486,6 +682,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -501,6 +704,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -517,6 +727,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -533,6 +750,13 @@ groups:
       code_generation:
         metric_value_type: double
         exclude: true
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -548,6 +772,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -564,6 +795,13 @@ groups:
       code_generation:
         metric_value_type: double
         exclude: true
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -579,6 +817,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -594,6 +839,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -610,6 +862,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100 }
+          distribution: { type: exponential, mean: 1 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed
@@ -635,6 +894,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100 }
+          distribution: { type: exponential, mean: 1 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     deprecated:
       reason: renamed

@@ -32,6 +32,10 @@ groups:
           environment variable.
         examples: ['job-name-xxxx', 'sample-job-mdw84']
       - id: gcp.cloud_run.job.task_index
+        annotations:
+          traffic-generator:
+            range: { min: 0, max: 99 }
+            distribution: { type: exponential, mean: 5 }
         type: int
         stability: development
         brief: >
@@ -71,6 +75,10 @@ groups:
           The name of the service as configured in AppHub.
         examples: ['my-service']
       - id: gcp.apphub.service.environment_type
+        annotations:
+          traffic-generator:
+            values: [PRODUCTION, STAGING, DEVELOPMENT, TEST]
+            weights: [50, 20, 20, 10]
         type:
           members:
             - id: production
@@ -95,6 +103,10 @@ groups:
         note: >
           [See AppHub environment type](https://cloud.google.com/app-hub/docs/reference/rest/v1/Attributes#type_1)
       - id: gcp.apphub.service.criticality_type
+        annotations:
+          traffic-generator:
+            values: [MEDIUM, HIGH, LOW, MISSION_CRITICAL]
+            weights: [40, 30, 20, 10]
         type:
           members:
             - id: mission_critical
@@ -125,6 +137,10 @@ groups:
           The name of the workload as configured in AppHub.
         examples: ['my-workload']
       - id: gcp.apphub.workload.environment_type
+        annotations:
+          traffic-generator:
+            values: [PRODUCTION, STAGING, DEVELOPMENT, TEST]
+            weights: [50, 20, 20, 10]
         type:
           members:
             - id: production
@@ -149,6 +165,10 @@ groups:
         note: >
           [See AppHub environment type](https://cloud.google.com/app-hub/docs/reference/rest/v1/Attributes#type_1)
       - id: gcp.apphub.workload.criticality_type
+        annotations:
+          traffic-generator:
+            values: [MEDIUM, HIGH, LOW, MISSION_CRITICAL]
+            weights: [40, 30, 20, 10]
         type:
           members:
             - id: mission_critical
@@ -204,6 +224,10 @@ groups:
           The name of the destination service as configured in AppHub.
         examples: ['my-service']
       - id: gcp.apphub_destination.service.environment_type
+        annotations:
+          traffic-generator:
+            values: [PRODUCTION, STAGING, DEVELOPMENT, TEST]
+            weights: [50, 20, 20, 10]
         type:
           members:
             - id: production
@@ -226,6 +250,10 @@ groups:
         brief: >
           Software lifecycle stage of a destination service as defined [AppHub environment type](https://cloud.google.com/app-hub/docs/reference/rest/v1/Attributes#type_1)
       - id: gcp.apphub_destination.service.criticality_type
+        annotations:
+          traffic-generator:
+            values: [MEDIUM, HIGH, LOW, MISSION_CRITICAL]
+            weights: [40, 30, 20, 10]
         type:
           members:
             - id: mission_critical
@@ -254,6 +282,10 @@ groups:
           The name of the destination workload as configured in AppHub.
         examples: ['my-workload']
       - id: gcp.apphub_destination.workload.environment_type
+        annotations:
+          traffic-generator:
+            values: [PRODUCTION, STAGING, DEVELOPMENT, TEST]
+            weights: [50, 20, 20, 10]
         type:
           members:
             - id: production
@@ -277,6 +309,10 @@ groups:
           Environment of a destination workload is the stage of a software lifecycle as provided in the
           [AppHub environment type](https://cloud.google.com/app-hub/docs/reference/rest/v1/Attributes#type_1)
       - id: gcp.apphub_destination.workload.criticality_type
+        annotations:
+          traffic-generator:
+            values: [MEDIUM, HIGH, LOW, MISSION_CRITICAL]
+            weights: [40, 30, 20, 10]
         type:
           members:
             - id: mission_critical

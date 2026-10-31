@@ -11,6 +11,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.system.message
     type: event
     stability: development
@@ -48,6 +52,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.user.message
     type: event
     stability: development
@@ -85,6 +93,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.assistant.message
     type: event
     stability: development
@@ -176,6 +188,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.tool.message
     type: event
     stability: development
@@ -220,6 +236,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.choice
     type: event
     stability: development
@@ -358,6 +378,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.client.inference.operation.details
     type: event
     stability: development
@@ -377,6 +401,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [INFO, DEBUG]
+          weights: [80, 20]
     name: gen_ai.evaluation.result
     type: event
     stability: development
@@ -418,6 +446,10 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        severity:
+          values: [ERROR, WARN, FATAL]
+          weights: [80, 15, 5]
     name: gen_ai.client.operation.exception
     stability: development
     deprecated:

@@ -6,6 +6,12 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 60, max: 2592000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "The time the system has been running."
     note: |
@@ -23,6 +29,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Reports the number of actual physical processor cores on the hardware."
     note: "Calculated by multiplying the number of sockets by the number of cores per socket"
@@ -38,6 +51,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Reports the number of logical (virtual) processor cores created by the operating system to manage multitasking."
     note: "Calculated by multiplying the number of sockets by the number of cores per socket, and then by the number of threads per core"
@@ -53,6 +73,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 60.0 }
+          distribution: { type: exponential, mean: 0.5 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Seconds each logical CPU spent on each mode."
     instrument: counter
@@ -71,6 +98,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "For each logical CPU, the utilization is calculated as the change in cumulative CPU time (cpu.time) over a measurement interval, divided by the elapsed time."
     instrument: gauge
@@ -89,6 +123,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 800000000, max: 5500000000 }
+          distribution: { type: normal, mean: 2800000000, stddev: 400000000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Operating frequency of the logical CPU in Hertz."
     instrument: gauge
@@ -105,6 +146,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Reports memory in use by state."
     instrument: updowncounter
@@ -120,6 +168,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Total virtual memory available in the system."
     instrument: updowncounter
@@ -134,6 +189,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: Percentage of memory bytes in use.
     instrument: gauge
@@ -150,6 +212,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "UNIX swap or windows pagefile usage."
     instrument: updowncounter
@@ -168,6 +237,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: Swap (UNIX) or pagefile (windows) utilization.
     instrument: gauge
@@ -186,6 +262,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100 }
+          distribution: { type: exponential, mean: 1 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: The number of page faults.
     instrument: counter
@@ -202,6 +285,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100000 }
+          distribution: { type: exponential, mean: 100 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     brief: The number of paging operations.
     instrument: counter
     unit: "{operation}"
@@ -218,6 +308,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 1073741824 }
+          distribution: { type: exponential, mean: 1048576 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: Disk bytes transferred.
     instrument: counter
@@ -234,6 +331,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100000 }
+          distribution: { type: exponential, mean: 100 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: Disk operations count.
     instrument: counter
@@ -250,6 +354,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 60.0 }
+          distribution: { type: exponential, mean: 0.5 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Time disk spent activated."
     instrument: counter
@@ -272,6 +383,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 60.0 }
+          distribution: { type: exponential, mean: 0.5 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Sum of the time each operation took to complete."
     instrument: counter
@@ -293,6 +411,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100000 }
+          distribution: { type: exponential, mean: 100 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: The number of disk reads/writes merged into single physical disk access operations.
     instrument: counter
@@ -309,6 +434,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "The total storage capacity of the disk."
     instrument: updowncounter
@@ -325,6 +457,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Reports a filesystem's space usage across different states."
     note: |
@@ -349,6 +488,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: Fraction of filesystem bytes used.
     instrument: gauge
@@ -370,6 +516,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "The total storage capacity of the filesystem."
     instrument: updowncounter
@@ -390,6 +543,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 500 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Filesystem lock counts."
     instrument: updowncounter
@@ -411,6 +571,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100000 }
+          distribution: { type: exponential, mean: 100 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Count of packets that are dropped or discarded even though there was no error."
     instrument: counter
@@ -433,6 +600,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100000 }
+          distribution: { type: exponential, mean: 100 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: The number of packets transferred.
     instrument: counter
@@ -449,6 +623,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 100 }
+          distribution: { type: exponential, mean: 1 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Count of network errors detected."
     instrument: counter
@@ -471,6 +652,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 1073741824 }
+          distribution: { type: exponential, mean: 1048576 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: The number of bytes transmitted and received.
     instrument: counter
@@ -487,6 +675,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 1000 }
+          distribution: { type: normal, mean: 50, stddev: 30 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: The number of connections.
     instrument: updowncounter
@@ -505,6 +700,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 500 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Total number of processes in each state."
     instrument: updowncounter
@@ -520,6 +722,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 1000 }
+          distribution: { type: exponential, mean: 10 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Total number of processes created over uptime of the host."
     instrument: counter
@@ -534,6 +743,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 500 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "The maximum number of concurrent processes/tasks allowed by the operating system."
     instrument: updowncounter
@@ -553,6 +769,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "An estimate of how much memory is available for starting new applications, without causing swapping."
     note: |
@@ -573,6 +796,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Shared memory used (mostly by tmpfs)."
     note: |
@@ -589,6 +819,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Total number of hugepages available."
     instrument: updowncounter
@@ -603,6 +840,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "System hugepage size in bytes."
     instrument: updowncounter
@@ -617,6 +861,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Number of reserved hugepages."
     note: |
@@ -635,6 +886,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Number of surplus hugepages."
     note: |
@@ -653,6 +911,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Number of hugepages in use by state."
     instrument: updowncounter
@@ -668,6 +933,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 1.0 }
+          distribution: { type: normal, mean: 0.4, stddev: 0.2 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Percentage of hugepages in use by state."
     instrument: gauge
@@ -683,6 +955,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: "Reports the memory used by the Linux kernel for managing caches of frequently used objects."
     note: |

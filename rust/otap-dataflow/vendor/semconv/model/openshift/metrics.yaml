@@ -6,6 +6,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -24,6 +31,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -42,6 +56,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -60,6 +81,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: double
+      traffic-generator:
+        value:
+          range: { min: 0.0, max: 64.0 }
+          distribution: { type: normal, mean: 4.0, stddev: 4.0 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -80,6 +108,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -98,6 +133,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -116,6 +158,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -134,6 +183,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -154,6 +210,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -175,6 +238,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -198,6 +268,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -225,6 +302,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -254,6 +338,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -279,6 +370,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 200 }
+          distribution: { type: normal, mean: 20, stddev: 15 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -306,6 +404,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -324,6 +429,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -342,6 +454,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -360,6 +479,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 68719476736 }
+          distribution: { type: lognormal, mean: 536870912, stddev: 1073741824 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.
@@ -380,6 +506,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The enforced hard limit of the resource across all projects.
@@ -401,6 +534,13 @@ groups:
     annotations:
       code_generation:
         metric_value_type: int
+      traffic-generator:
+        value:
+          range: { min: 0, max: 10000000 }
+          distribution: { type: lognormal, mean: 10000, stddev: 50000 }
+        data_points:
+          values: [1, 2, 3]
+          weights: [6, 3, 1]
     stability: development
     brief: |
       The current observed total usage of the resource across all projects.

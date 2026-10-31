@@ -45,6 +45,10 @@ groups:
       This section defines attributes for Azure Cosmos DB.
     attributes:
       - id: azure.cosmosdb.connection.mode
+        annotations:
+          traffic-generator:
+            values: [direct, gateway]
+            weights: [70, 30]
         type:
           members:
             - id: gateway
@@ -58,12 +62,20 @@ groups:
         stability: development
         brief: Cosmos client connection mode.
       - id: azure.cosmosdb.operation.request_charge
+        annotations:
+          traffic-generator:
+            range: { min: 1.0, max: 1000.0 }
+            distribution: { type: lognormal, mean: 10.0, stddev: 25.0 }
         type: double
         stability: development
         brief: >
           The number of request units consumed by the operation.
         examples: [46.18, 1.0]
       - id: azure.cosmosdb.request.body.size
+        annotations:
+          traffic-generator:
+            range: { min: 0, max: 1048576 }
+            distribution: { type: lognormal, mean: 2048, stddev: 8192 }
         type: int
         stability: development
         brief: Request payload size in bytes.
@@ -79,6 +91,10 @@ groups:
         examples:
           - ["North Central US", "Australia East", "Australia Southeast"]
       - id: azure.cosmosdb.response.sub_status_code
+        annotations:
+          traffic-generator:
+            values: [0, 1000, 1002, 3200]
+            weights: [85, 5, 5, 5]
         type: int
         stability: development
         brief: Cosmos DB sub status code.

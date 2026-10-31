@@ -136,6 +136,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     type: span
     stability: development
     deprecated:
@@ -214,6 +221,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     extends: attributes.gen_ai.inference.openai_based
     stability: development
     deprecated:
@@ -256,6 +270,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     extends: attributes.gen_ai.inference.openai_based
     stability: development
     deprecated:
@@ -292,6 +313,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     type: span
     span_kind: client
     stability: development
@@ -332,6 +360,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     type: span
     span_kind: client
     stability: development
@@ -371,6 +406,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     type: span
     stability: development
     deprecated:
@@ -532,6 +574,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     type: span
     stability: development
     deprecated:
@@ -567,6 +616,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [95, 3, 2]
     type: span
     stability: development
     deprecated:
@@ -598,6 +654,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [95, 3, 2]
     type: span
     stability: development
     deprecated:
@@ -651,6 +714,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     extends: span.gen_ai.inference.client
     stability: development
     deprecated:
@@ -671,6 +741,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [85, 10, 5]
     extends: attributes.gen_ai.inference.client
     stability: development
     deprecated:
@@ -704,6 +781,13 @@ groups:
     annotations:
       dependency_resolution:
         exclude: true
+      traffic-generator:
+        duration:
+          range: { min: 50.0, max: 120000.0 }
+          distribution: { type: lognormal, mean: 2500.0, stddev: 3000.0 }
+        status:
+          values: [unset, ok, error]
+          weights: [95, 3, 2]
     type: span
     span_kind: internal
     stability: development
